@@ -60,8 +60,9 @@ struct analyse_result {
 void print_analyse_result(struct analyse_result *result)
 {
   for(int i = 0; i < result->tile_count; ++i) {
-    printf("tile %i: hash:%x left: %x right: %x top: %x bottom: %x (%d, %d)\n",
+    printf("tile %i (weight: %0.2f): hash:%x left: %x right: %x top: %x bottom: %x (%d, %d)\n",
         i,
+        result->tiles[i].weight,
         result->tiles[i].hash,
         result->tiles[i].hash_dir[LEFT],
         result->tiles[i].hash_dir[RIGHT],
@@ -155,6 +156,7 @@ int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t direct
   {
     if (ret->tiles[i].hash == hash) {
       found = &ret->tiles[i];
+      ret->tiles[i].weight += 1;
       return i;
     }
   }
@@ -165,6 +167,7 @@ int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t direct
   memset(found, 0, sizeof(struct tiles));
   found->rect = rect;
   found->hash = hash;
+  found->weight = 1;
   for(int dir = 0; dir < 4; ++dir) {
     found->hash_dir[dir] = directions[dir];
   }
@@ -253,7 +256,7 @@ int main() {
       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
 
-  struct analyse_result *test = analyse_image("test.png", 8);
+  struct analyse_result *test = analyse_image("test.png", 4);
   print_analyse_result(test);
 
   while (running) {
