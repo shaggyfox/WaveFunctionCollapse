@@ -44,6 +44,7 @@ struct analyse_result {
   int tile_size;
   int tile_count;
   struct tiles {
+    SDL_Rect rect;
     uint32_t bit;               /* bit-id */
     uint32_t hash;              /* hash value of tile */
     uint32_t hash_dir[4];       /* hash value for each side */
@@ -59,13 +60,15 @@ struct analyse_result {
 void print_analyse_result(struct analyse_result *result)
 {
   for(int i = 0; i < result->tile_count; ++i) {
-    printf("tile %i: hash:%x left: %x right: %x top: %x bottom: %x\n",
+    printf("tile %i: hash:%x left: %x right: %x top: %x bottom: %x (%d, %d)\n",
         i,
         result->tiles[i].hash,
         result->tiles[i].hash_dir[LEFT],
         result->tiles[i].hash_dir[RIGHT],
         result->tiles[i].hash_dir[TOP],
-        result->tiles[i].hash_dir[BOTTOM]);
+        result->tiles[i].hash_dir[BOTTOM],
+        result->tiles[i].rect.x,
+        result->tiles[i].rect.y);
     printf("rules:\n");
     for( int dir = 0; dir < 4; ++dir) {
       printf("%s:\n", dir_names[dir]);
@@ -87,7 +90,6 @@ void print_analyse_result(struct analyse_result *result)
 void hash_list_add(struct hash_list *list, uint32_t hash)
 {
   /* search for hash */
-  struct hash_list *found = NULL;
   for (int i = 0; i < list->count; ++i) {
     if (hash == list->values[i]) {
       /* found nothing to do */
@@ -145,7 +147,7 @@ uint32_t calculate_hash(enum direction_e direction, char *hash_buffer, int tile_
   return ret;
 }
 
-int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t directions[4])
+int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t directions[4], SDL_Rect rect)
 {
   /* try to find tile by hash */
   struct tiles *found = NULL;
@@ -161,6 +163,7 @@ int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t direct
   found = &ret->tiles[ret->tile_count];
   ret->tile_count += 1;
   memset(found, 0, sizeof(struct tiles));
+  found->rect = rect;
   found->hash = hash;
   for(int dir = 0; dir < 4; ++dir) {
     found->hash_dir[dir] = directions[dir];
@@ -215,7 +218,8 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
       for (int dir = 0; dir < 4; ++dir) {
         side_hashes[dir] = calculate_hash(dir, hash_buffer, tile_size);
       }
-      ret->map[pos++] = add_tile_to_index(ret, adler32(hash_buffer, tile_size * tile_size * 4), side_hashes);
+      SDL_Rect rect = {tiles_x * tile_size, tiles_y * tile_size, tile_size, tile_size};
+      ret->map[pos++] = add_tile_to_index(ret, adler32(hash_buffer, tile_size * tile_size * 4), side_hashes, rect);
     }
   }
   /* okay, after setting up our input map, it's time to create the ruleset */
