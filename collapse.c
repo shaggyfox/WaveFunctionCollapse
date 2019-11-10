@@ -10,7 +10,7 @@ enum direction_e{TOP, LEFT, BOTTOM, RIGHT};
 static int dir_modifier_x[] = {0, -1, 0, 1};
 static int dir_modifier_y[] = {-1, 0, 1, 0};
 #define DIR_X(dir, x) ((x) + dir_modifier_x[dir])
-#define DIR_Y(dir, y) ((x) + dir_modifier_x[dir])
+#define DIR_Y(dir, y) ((y) + dir_modifier_y[dir])
 static char *dir_names[] = {"TOP", "LEFT", "BOTTOM", "RIGHT"};
 
 uint32_t adler32(const void *buf, size_t buflength) {
@@ -87,6 +87,7 @@ void print_analyse_result(struct analyse_result *result)
 void hash_list_add(struct hash_list *list, uint32_t hash)
 {
   /* search for hash */
+  struct hash_list *found = NULL;
   for (int i = 0; i < list->count; ++i) {
     if (hash == list->values[i]) {
       /* found nothing to do */
@@ -172,7 +173,7 @@ void analyse_map(struct analyse_result *result)
   int w = result->map_width;
   int h = result->map_height;
   int pos = 0;
-#define IN_RANGE(x, y) ((x) > 0 && (x) < w && (y) > 0 && (y) < h)
+#define IN_RANGE(x, y) ((x) >= 0 && (x) < w && (y) >= 0 && (y) < h)
   for (int y = 0; y < result->map_height; ++y) {
     for (int x = 0; x < result->map_width; ++x) {
       for ( int dir = 0; dir < 4; ++dir) {
@@ -206,7 +207,6 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
   for (int tiles_y = 0; tiles_y < tiles_h; ++tiles_y) {
     for (int tiles_x = 0; tiles_x < tiles_w; ++ tiles_x) {
       char *offset = &pixel_data[tiles_y * tile_size * surface_width * 4 + tiles_x * tile_size * 4];
-      printf("x=%d y=%d\n", tiles_x * tile_size, tiles_y * tile_size);
       /* read tile_sizeXtile_size chunk at current position */
       for (int chunk_y = 0; chunk_y < tile_size; ++chunk_y) {
         memcpy(&hash_buffer[chunk_y * tile_size * 4], &offset[chunk_y * surface_width * 4], tile_size * 4);
