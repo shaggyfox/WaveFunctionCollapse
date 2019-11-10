@@ -151,25 +151,24 @@ uint32_t calculate_hash(enum direction_e direction, char *hash_buffer, int tile_
 int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t directions[4], SDL_Rect rect)
 {
   /* try to find tile by hash */
-  struct tiles *found = NULL;
   for (int i = 0; i < ret->tile_count; ++i)
   {
     if (ret->tiles[i].hash == hash) {
-      found = &ret->tiles[i];
       ret->tiles[i].weight += 1;
       return i;
     }
   }
   /* add new entry */
+  struct tiles *new_entry = NULL;
   ret->tiles = realloc(ret->tiles, (ret->tile_count + 1)* sizeof(struct tiles));
-  found = &ret->tiles[ret->tile_count];
+  new_entry = &ret->tiles[ret->tile_count];
   ret->tile_count += 1;
-  memset(found, 0, sizeof(struct tiles));
-  found->rect = rect;
-  found->hash = hash;
-  found->weight = 1;
+  memset(new_entry, 0, sizeof(struct tiles));
+  new_entry->rect = rect;
+  new_entry->hash = hash;
+  new_entry->weight = 1;
   for(int dir = 0; dir < 4; ++dir) {
-    found->hash_dir[dir] = directions[dir];
+    new_entry->hash_dir[dir] = directions[dir];
   }
   return ret->tile_count - 1;
 }
