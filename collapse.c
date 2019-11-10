@@ -54,8 +54,8 @@ struct analyse_result {
   uint32_t map_width;
   uint32_t map_height;
   uint32_t *map;
+  SDL_Texture *texture;
 };
-
 
 void print_analyse_result(struct analyse_result *result)
 {
@@ -193,6 +193,8 @@ void analyse_map(struct analyse_result *result)
   }
 }
 
+SDL_Renderer *glob_renderer = NULL;
+
 struct analyse_result *analyse_image(char *name, int tile_size) {
   struct analyse_result *ret = calloc(1, sizeof(*ret));
   char *hash_buffer = calloc(1, tile_size * tile_size * 4);
@@ -204,6 +206,7 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
   ret->map = calloc(1, sizeof(*ret->map) * tiles_w * tiles_h);
   ret->map_width = tiles_w;
   ret->map_height = tiles_h;
+  ret->tile_size = tile_size;
   char *pixel_data = surface->pixels;
   int pos = 0;
   /* first split input image in tile_size chunks */
@@ -224,7 +227,19 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
   }
   /* okay, after setting up our input map, it's time to create the ruleset */
   analyse_map(ret);
+  /* create texture from surface */
+  ret->texture = SDL_CreateTextureFromSurface(glob_renderer, surface);
   return ret;
+}
+
+void draw_input_map(struct analyse_result *result)
+{
+  for(int y = 0; y < result->map_height; ++y) {
+    for (int x = 0; x < result->map_width; ++x) {
+      SDL_Rect pos = {x * result->tile_size, y * result->tile_size, result->tile_size, result->tile_size};
+      SDL_RenderCopy (glob_renderer, result->texture, &result->tiles[result->map[y * result->map_width + x]].rect, &pos);
+    }
+  }
 }
 
 int main() {
@@ -234,7 +249,7 @@ int main() {
       SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
       SCREEN_WIDTH, SCREEN_HEIGHT, 0);
 
-  SDL_Renderer *glob_renderer = SDL_CreateRenderer(glob_window, -1,
+  glob_renderer = SDL_CreateRenderer(glob_window, -1,
       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
 
@@ -251,6 +266,7 @@ int main() {
       }
     }
     SDL_RenderClear(glob_renderer);
+    draw_input_map(test);
     SDL_RenderPresent(glob_renderer);
   }
 
