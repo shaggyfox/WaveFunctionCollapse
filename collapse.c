@@ -1,6 +1,45 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+
+
+float my_random(void)
+{
+  return ((float)rand()) /(float)RAND_MAX;
+}
+
+struct weighted_element {
+  int id;       /* value returned by select_by_weight (on match) */
+  float weight; /* weight of element */
+  float start;  /* intern, will be modified */
+  float end;    /* intern, will be modified */
+};
+
+int select_by_weight(int cnt, struct weighted_element *elements)
+{
+  float last = 0;
+  int ret = -1;
+  if (cnt > 0) {
+    for (int i = 0; i < cnt; ++i) {
+      elements[i].start = last;
+      last = elements[i].end = elements[i].weight + last;
+    }
+    float rnd = my_random() * last;
+    printf("rnd= %0.2f\n", rnd);
+    for (int i = 0; i < cnt; ++i) {
+      printf("weight: %0.2f (>=) start %0.2f (<)end %0.2f\n",
+          elements[i].weight, elements[i].start, elements[i].end);
+      if (rnd >= elements[i].start && rnd < elements[i].end) {
+        printf("match %i\n", elements[i].id);
+      }
+    }
+    if (ret == -1) {
+      ret = elements[cnt - 1].id;
+    }
+  }
+  return ret;
+}
+
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 480
 
@@ -56,6 +95,11 @@ struct analyse_result {
   uint32_t *map;
   SDL_Texture *texture;
 };
+
+int select_tile_based_on_weight(uint32_t ids, struct analyse_result *result)
+{
+  return 0;
+}
 
 void print_analyse_result(struct analyse_result *result)
 {
@@ -245,6 +289,7 @@ void draw_input_map(struct analyse_result *result)
 }
 
 int main() {
+  srand(time(NULL));
   int running =1 ;
   SDL_Init(SDL_INIT_VIDEO);
   SDL_Window *glob_window = SDL_CreateWindow("Collapse",
