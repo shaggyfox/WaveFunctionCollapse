@@ -25,12 +25,8 @@ int select_by_weight(int cnt, struct weighted_element *elements)
       last = elements[i].end = elements[i].weight + last;
     }
     float rnd = my_random() * last;
-    printf("rnd= %0.2f\n", rnd);
     for (int i = 0; i < cnt; ++i) {
-      printf("weight: %0.2f (>=) start %0.2f (<)end %0.2f\n",
-          elements[i].weight, elements[i].start, elements[i].end);
       if (rnd >= elements[i].start && rnd < elements[i].end) {
-        printf("match %i\n", elements[i].id);
 	ret = elements[i].id;
       }
     }
@@ -39,6 +35,59 @@ int select_by_weight(int cnt, struct weighted_element *elements)
     }
   }
   return ret;
+}
+
+typedef struct bitfield32_st {
+    uint32_t data;
+} bitfield32;
+
+int bitfield32_cmp(bitfield32 a, bitfield32 b)
+{
+  return a.data == b.data;
+}
+
+void bitfield32_set_bit(bitfield32 *bf, int bit)
+{
+  bf->data |= (1 << bit);
+}
+
+void bitfield32_unset_bit(bitfield32 *bf, int bit)
+{
+  bf->data &= ~(1 << bit);
+}
+
+bitfield32 bitfield32_or(bitfield32 a, bitfield32 b)
+{
+  bitfield32 ret = {0};
+  ret.data = a.data | b.data;
+  return ret;
+}
+
+void bitfield32_and(bitfield32 *a, bitfield32 b)
+{
+  a->data &= b.data;
+}
+
+typedef struct bitfield32_iter_st {
+  bitfield32 bits;
+  int pos;
+} bitfield32_iter;
+
+bitfield32_iter bitfield32_get_iter(bitfield32 bf)
+{
+  bitfield32_iter ret = {bf.data, 0};
+  return ret;
+}
+
+int bitfield32_iter_next(bitfield32_iter *iter) {
+  while (iter->pos < 32) {
+    if (iter->bits.data & (1 << iter->pos)) {
+      iter->pos ++;
+      return iter->pos -1;
+    }
+    iter->pos ++;
+  }
+  return -1;
 }
 
 #define SCREEN_WIDTH 640
@@ -97,9 +146,38 @@ struct analyse_result {
   SDL_Texture *texture;
 };
 
-int select_tile_based_on_weight(uint32_t ids, struct analyse_result *result)
+
+//shannon_entropy_for_square =
+//  log(sum(weight)) -
+//  (sum(weight * log(weight)) / sum(weight))
+//
+static float get_entropy(bitfield32 v, struct analyse_result *res)
 {
-  return 0;
+  float sum = 0.0;
+  float sum_weight_log = 0.0;
+  bitfield32_iter i = bitfield32_get_iter(v);
+  int id;
+  while (-1 != (id = bitfield32_iter_next(&i))) {
+    float weight = res->tiles[id].weight;
+    sum += weight;
+    sum_weight_log += weight * logf(weight);
+  }
+  return logf(sum) - sum_weight_log / sum;
+}
+
+
+int select_tile_based_on_weight(bitfield32 bits, struct analyse_result *result)
+{
+  struct weighted_element e[32];
+  int cnt = 0;
+  bitfield32_iter i = bitfield32_get_iter(bits);
+  int id;
+  while (-1 != (id = bitfield32_iter_next(&i))) {
+    e[cnt].weight = result->tiles[id].weight;
+    e[cnt].id = id;
+    cnt += 1;
+  }
+  return select_by_weight(cnt, e);
 }
 
 void print_analyse_result(struct analyse_result *result)
@@ -155,6 +233,26 @@ int hash_list_find(struct hash_list *list, uint32_t hash)
     }
   }
   return 0;
+}
+
+typedef struct hash_list_iter {
+  int pos;
+  struct hash_list *list;
+} hash_list_iter;
+
+void hash_list_iter_init(struct hash_list_iter *iter, struct hash_list *list)
+{
+  iter->pos = 0;
+  iter->list = list;
+}
+
+int hash_list_iter_next(struct hash_list_iter *iter, uint32_t *hash)
+{
+  if (iter->pos >= iter->list->count) {
+    return 0;
+  }
+  *hash = iter->list->values[iter->pos++];
+  return 1;
 }
 
 uint32_t calculate_hash(enum direction_e direction, char *hash_buffer, int tile_size)
@@ -279,14 +377,120 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
   return ret;
 }
 
+void draw_tile(int x, int y, int tile_id, struct analyse_result *res)
+{
+  SDL_SetTextureBlendMode(res->texture, SDL_BLENDMODE_NONE);
+  SDL_Rect rect = {x, y, res->tile_size, res->tile_size};
+  SDL_RenderCopy(glob_renderer, res->texture, &res->tiles[tile_id].rect, &rect);
+}
+
+void draw_tile_based_on_weight(int x, int y, bitfield32 bits, struct analyse_result *res)
+{
+  float w[32] = {0.0};
+  float sum = 0;
+  int cnt = 0;
+  int ids[32];
+  bitfield32_iter iter = bitfield32_get_iter(bits);
+  int id;
+  while (-1 != (id = bitfield32_iter_next(&iter))) {
+    w[cnt] += res->tiles[id].weight;
+    ids[cnt] = id;
+    sum += res->tiles[id].weight;
+    cnt += 1;
+  }
+  SDL_SetTextureBlendMode(res->texture, SDL_BLENDMODE_BLEND);
+  for (int i = 0; i < cnt; ++i) {
+    SDL_SetTextureAlphaMod(res->texture, (w[i] / sum) * 255.0);
+    SDL_Rect rect = {x, y, res->tile_size, res->tile_size};
+    SDL_RenderCopy(glob_renderer, res->texture, &res->tiles[ids[i]].rect, &rect);
+  }
+}
+
 void draw_input_map(struct analyse_result *result)
 {
   for(int y = 0; y < result->map_height; ++y) {
     for (int x = 0; x < result->map_width; ++x) {
       SDL_Rect pos = {x * result->tile_size, y * result->tile_size, result->tile_size, result->tile_size};
-      SDL_RenderCopy (glob_renderer, result->texture, &result->tiles[result->map[y * result->map_width + x]].rect, &pos);
+      draw_tile(x * result->tile_size, y * result->tile_size, result->map[y * result->map_width + x], result);
     }
   }
+}
+
+typedef struct bitfield32_map {
+  int map_width;
+  int map_height;
+  bitfield32 *map;
+} bitfield_map;
+
+void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
+{
+  for(int y = 0; y < map->map_height; ++y) {
+    for (int x = 0; x < map->map_width; ++x) {
+      SDL_Rect pos = {x * result->tile_size, y * result->tile_size, result->tile_size, result->tile_size};
+      draw_tile_based_on_weight(x * result->tile_size, y * result->tile_size, map->map[y * map->map_width + x], result);
+    }
+  }
+}
+
+/* this binary-ands map position x/y with value and update neighbours recursively */
+/* returns 
+ * -1 tile out of range
+ *  0 nothing changed
+ *  1 value was modified
+ */
+
+
+/* what's happening here?
+ *
+ */
+int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result *res)
+{
+  if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
+    return -1;
+  }
+  bitfield32 *map_element = &map->map[y * map->map_width + x];
+  bitfield32 old_value = *map_element;
+
+  bitfield32_iter main_iter = bitfield32_get_iter(*map_element);
+  int main_id;
+  while (-1 != (main_id = bitfield32_iter_next(&main_iter))) {
+    for (int dir = 0; dir < 4; ++dir) {
+      int test_x = DIR_X(dir, x);
+      int test_y = DIR_Y(dir, y);
+      if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_width) {
+        bitfield32 *test_element = &map->map[map->map_width * test_y + test_x];
+        bitfield32 allowed = {0};
+        bitfield32_iter iter = bitfield32_get_iter(*test_element);
+        int id;
+        int match = 0;
+        /* check all not-jet-forbidden ids */
+        while (match == 0 && -1 != (id = bitfield32_iter_next(&iter))) {
+          hash_list_iter hl_iter;
+          hash_list_iter_init(&hl_iter, &res->tiles[id].allowed_neighbour_hashes[OPOSITE_DIRECTION(dir)]);
+          uint32_t hash;
+          while(hash_list_iter_next(&hl_iter, &hash)) {
+            if (hash == res->tiles[main_id].hash_dir[dir]) {
+              match = 1;
+              break;
+            }
+          }
+        }
+        if (!match) {
+          bitfield32_unset_bit(map_element, main_id);
+          break;
+        }
+      }
+    }
+  }
+  if (!bitfield32_cmp(old_value, *map_element)) {
+    for (int dir = 0; dir < 4; ++dir) {
+      int test_x = DIR_X(dir, x);
+      int test_y = DIR_Y(dir, y);
+      update_map_with_rules(map, test_x, test_y, res);
+    }
+    return 1;
+  }
+  return 0;
 }
 
 #include <time.h>
@@ -302,9 +506,27 @@ int main() {
   glob_renderer = SDL_CreateRenderer(glob_window, -1,
       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
+  SDL_RenderSetLogicalSize(glob_renderer, 64, 64);
 
   struct analyse_result *test = analyse_image("test.png", 4);
   print_analyse_result(test);
+
+  bitfield_map bf_map = {0};
+  bf_map.map_width=10;
+  bf_map.map_height=10;
+  bf_map.map = calloc(1, 10 * 10);
+  for(int i = 0; i < 10 * 10; ++i) {
+    for(int b = 0; b < test->tile_count; ++b) {
+      bitfield32_set_bit(&bf_map.map[i], b);
+    }
+  }
+  int tt = 1;
+  bitfield32_unset_bit(&bf_map.map[tt], 1);
+  bitfield32_unset_bit(&bf_map.map[tt], 2);
+  bitfield32_unset_bit(&bf_map.map[tt], 3);
+  bitfield32_unset_bit(&bf_map.map[tt], 4);
+  bitfield32_unset_bit(&bf_map.map[tt], 5);
+  printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 0, 0, test));
 
   while (running) {
     SDL_Event event;
@@ -316,12 +538,13 @@ int main() {
       }
     }
     SDL_RenderClear(glob_renderer);
-    draw_input_map(test);
+    //draw_input_map(test);
+    draw_map_with_weight(&bf_map, test);
     SDL_RenderPresent(glob_renderer);
   }
 
   SDL_Quit();
-
+#if 0
   struct weighted_element e[3] = {{.weight=2, .id=0}, {.weight=1, .id=1}, {.weight=1, .id=2}};
   int result[3] = {0,0,0};
   for (int i = 0; i < 100000; ++i) {
@@ -331,5 +554,21 @@ int main() {
     printf("%i: %i\n", i, result[i]);
   }
 
+  bitfield32 bf = {0};
+  for (int i = 0; i <= 8; ++i) {
+    bitfield32_set_bit(&bf, i);
+  }
+  bitfield32_iter iter = bitfield32_get_iter(bf);
+  for (int i = bitfield32_iter_next(&iter); i != -1; i = bitfield32_iter_next(&iter)) {
+    printf("-> bit %d set\n", i);
+  }
+  int result[9] = {0};
+  for(int i = 0; i < 10000; ++i) {
+    result[select_tile_based_on_weight(bf, test)] ++;
+  }
+  for(int i = 0; i < 9; ++i) {
+    printf("%d: %d\n", i, result[i]);
+  }
+#endif
   return 0;
 }
