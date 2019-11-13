@@ -31,6 +31,7 @@ int select_by_weight(int cnt, struct weighted_element *elements)
           elements[i].weight, elements[i].start, elements[i].end);
       if (rnd >= elements[i].start && rnd < elements[i].end) {
         printf("match %i\n", elements[i].id);
+	ret = elements[i].id;
       }
     }
     if (ret == -1) {
@@ -288,6 +289,8 @@ void draw_input_map(struct analyse_result *result)
   }
 }
 
+#include <time.h>
+
 int main() {
   srand(time(NULL));
   int running =1 ;
@@ -318,6 +321,15 @@ int main() {
   }
 
   SDL_Quit();
+
+  struct weighted_element e[3] = {{.weight=2, .id=0}, {.weight=1, .id=1}, {.weight=1, .id=2}};
+  int result[3] = {0,0,0};
+  for (int i = 0; i < 100000; ++i) {
+    result[select_by_weight(3, e)] ++;
+  }
+  for (int i = 0; i < 3; ++i) {
+    printf("%i: %i\n", i, result[i]);
+  }
 
   return 0;
 }
