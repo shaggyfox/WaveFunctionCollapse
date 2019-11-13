@@ -52,7 +52,7 @@ static int dir_modifier_y[] = {-1, 0, 1, 0};
 #define DIR_Y(dir, y) ((y) + dir_modifier_y[dir])
 static char *dir_names[] = {"TOP", "LEFT", "BOTTOM", "RIGHT"};
 
-uint32_t adler32(const void *buf, size_t buflength) {
+static uint32_t adler32(const void *buf, size_t buflength) {
   const uint8_t *buffer = (const uint8_t*)buf;
 
   uint32_t s1 = 1;
