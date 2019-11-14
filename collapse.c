@@ -40,6 +40,7 @@ int select_by_weight(int cnt, struct weighted_element *elements)
 typedef struct bitfield32_st {
   int bitcount_needs_update;
   int bitcount;
+  float entropy; /* used external */
   uint32_t data;
 } bitfield32;
 
@@ -70,6 +71,13 @@ void bitfield32_set_bit(bitfield32 *bf, int bit)
 {
   bf->bitcount_needs_update = 1;
   bf->data |= (1 << bit);
+}
+
+void bitfield32_set_to(bitfield32 *bf, int bit)
+{
+  bf->bitcount_needs_update = 0;
+  bf->bitcount = 1;
+  bf->data = 1u << bit;
 }
 
 void bitfield32_unset_bit(bitfield32 *bf, int bit)
@@ -112,6 +120,52 @@ static int dir_modifier_y[] = {-1, 0, 1, 0};
 #define DIR_Y(dir, y) ((y) + dir_modifier_y[dir])
 static char *dir_names[] = {"TOP", "LEFT", "BOTTOM", "RIGHT"};
 
+
+uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
+{
+	uint32_t h = seed;
+	if (len > 3) {
+		size_t i = len >> 2;
+		do {
+			uint32_t k;
+			memcpy(&k, key, sizeof(uint32_t));
+			key += sizeof(uint32_t);
+			k *= 0xcc9e2d51;
+			k = (k << 15) | (k >> 17);
+			k *= 0x1b873593;
+			h ^= k;
+			h = (h << 13) | (h >> 19);
+			h = h * 5 + 0xe6546b64;
+		} while (--i);
+	}
+	if (len & 3) {
+		size_t i = len & 3;
+		uint32_t k = 0;
+		do {
+			k <<= 8;
+			k |= key[i - 1];
+		} while (--i);
+		k *= 0xcc9e2d51;
+		k = (k << 15) | (k >> 17);
+		k *= 0x1b873593;
+		h ^= k;
+	}
+	h ^= len;
+	h ^= h >> 16;
+	h *= 0x85ebca6b;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35;
+	h ^= h >> 16;
+	return h;
+}
+
+
+static uint32_t adler32(char* key, size_t len)
+{
+  return murmur3_32((const uint8_t *)key, len, 123456);
+}
+
+/* 0
 static uint32_t adler32(const void *buf, size_t buflength) {
   const uint8_t *buffer = (const uint8_t*)buf;
 
@@ -124,6 +178,7 @@ static uint32_t adler32(const void *buf, size_t buflength) {
   }
   return (s2 << 16) | s1;
 }
+*/
 
 SDL_Surface *load_surface(char *data)
 {
@@ -378,6 +433,14 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
       }
       SDL_Rect rect = {tiles_x * tile_size, tiles_y * tile_size, tile_size, tile_size};
       ret->map[pos++] = add_tile_to_index(ret, adler32(hash_buffer, tile_size * tile_size * 4), side_hashes, rect);
+
+        /* DEBUG */
+      printf("%x = ", adler32(hash_buffer, tile_size * tile_size * 4));
+        for(int i= 0; i < tile_size * tile_size * 4; ++i) {
+          printf("%02x", hash_buffer[i]);
+        }
+        printf("\n");
+        /* DEBUG */
     }
   }
   /* okay, after setting up our input map, it's time to create the ruleset */
@@ -429,9 +492,9 @@ typedef struct bitfield32_map {
   int map_width;
   int map_height;
   bitfield32 *map;
-} bitfield_map;
+} bitfield32_map;
 
-void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
+void draw_map_with_weight(bitfield32_map *map, struct analyse_result *result)
 {
   for(int y = 0; y < map->map_height; ++y) {
     for (int x = 0; x < map->map_width; ++x) {
@@ -439,6 +502,7 @@ void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
     }
   }
 }
+
 
 /* this binary-ands map position x/y with value and update neighbours recursively */
 /* returns
@@ -451,7 +515,7 @@ void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
 /* what's happening here?
  *
  */
-int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result *res)
+int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res)
 {
   /* wo dont evaluate any tiles that are out-of-map */
   if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
@@ -498,6 +562,12 @@ int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result
     }
   }
   if (!bitfield32_cmp(old_value, *map_element)) {
+
+    /* recalculate entropy */
+    /* XXX ugly XXX */
+    map_element->entropy = get_entropy(*map_element, res);
+
+    /* update neighbours */
     for (int dir = 0; dir < 4; ++dir) {
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
@@ -508,7 +578,47 @@ int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result
   return 0;
 }
 
+void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_result *res)
+{
+  map->map_width = w;
+  map->map_height = h;
+  map->map = calloc(1, sizeof(*map->map) * w * h);
+  /* fill with all possibilities */
+  for (int i = 0; i < w * h; ++i) {
+    for(int b = 0; b < res->tile_count; ++b) {
+      bitfield32_set_bit(&map->map[i], b);
+    }
+  }
+  /* initial update */
+  for(int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      update_map_with_rules(map, x, y, res);
+    }
+  }
+  /* calculate entropy */
+  for(int i = 0; i < w * h; ++i) {
+    /* XXX ugly XXX */
+    map->map[i].entropy = get_entropy(map->map[i], res);
+  }
+}
 
+float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int *out_y)
+{
+  float smalest = 0.0;
+  for (int y = 0; y <  map->map_height; ++y) {
+    for (int x = 0; x < map->map_width; ++x) {
+      bitfield32 *b = &map->map[y * map->map_width + x];
+      if (bitfield32_get_bitcount(b) > 1) {
+        if (smalest == 0.0 || b->entropy < smalest) {
+          *out_x = x;
+          *out_y = y;
+          smalest = b->entropy;
+        }
+      }
+    }
+  }
+  return smalest;
+}
 
 #include <time.h>
 
@@ -528,7 +638,8 @@ int main() {
   struct analyse_result *test = analyse_image("test.png", 4);
   print_analyse_result(test);
 
-  bitfield_map bf_map = {0};
+  bitfield32_map bf_map = {0};
+  /*
   bf_map.map_width=10;
   bf_map.map_height=10;
   bf_map.map = calloc(1, 10 * 10 * sizeof(*bf_map.map));
@@ -537,20 +648,36 @@ int main() {
       bitfield32_set_bit(&bf_map.map[i], b);
     }
   }
-  bitfield32_unset_bit(&bf_map.map[11], 0);
-  printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
+  */
+  init_bitfield32_map(&bf_map, 25, 25, test);
+  //printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
+
 
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       switch(event.type) {
+        case SDL_KEYDOWN:
+          init_bitfield32_map(&bf_map, 25, 25, test);
+          break;
         case SDL_QUIT:
           running = 0;
           break;
       }
     }
     SDL_RenderClear(glob_renderer);
-    //draw_input_map(test);
+   // draw_input_map(test);
+    int x, y;
+    if (0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
+      bitfield32 *bf = &bf_map.map[y * bf_map.map_width + x];
+      bitfield32_set_to(bf, select_tile_based_on_weight(*bf, test));
+      /* update neighbours */
+      for(int dir = 0; dir < 4; ++dir) {
+         int test_x = DIR_X(dir, x);
+         int test_y = DIR_Y(dir, y);
+         update_map_with_rules(&bf_map, test_x, test_y, test);
+      }
+    }
     draw_map_with_weight(&bf_map, test);
     SDL_RenderPresent(glob_renderer);
   }
