@@ -19,6 +19,7 @@ set( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 #link_options(${ENGINE_CFLAGS})
 
 add_executable(collapse collapse.c)
+target_compile_options(collapse PUBLIC ${ENGINE_CFLAGS} PRIVATE -Werror)
 target_link_directories(collapse PUBLIC ${ENGINE_LIB_DIRS})
 target_link_libraries(collapse ${ENGINE_LIBRARIES})
 target_link_options(collapse PUBLIC ${ENGINE_CFLAGS})

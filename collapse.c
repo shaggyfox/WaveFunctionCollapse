@@ -17,9 +17,9 @@ struct weighted_element {
 
 int select_by_weight(int cnt, struct weighted_element *elements)
 {
-  float last = 0;
   int ret = -1;
   if (cnt > 0) {
+    float last = 0;
     for (int i = 0; i < cnt; ++i) {
       elements[i].start = last;
       last = elements[i].end = elements[i].weight + last;
@@ -38,8 +38,28 @@ int select_by_weight(int cnt, struct weighted_element *elements)
 }
 
 typedef struct bitfield32_st {
-    uint32_t data;
+  int bitcount_needs_update;
+  int bitcount;
+  uint32_t data;
 } bitfield32;
+
+void bitfield32_update_bitcount(bitfield32 *b)
+{
+  b->bitcount = 0;
+  for (int i = 0; i < 32; ++i) {
+    if (b->data & (1u << i)) {
+      b->bitcount += 1;
+    }
+  }
+}
+
+int bitfield32_get_bitcount(bitfield32 *bf)
+{
+  if (bf->bitcount_needs_update) {
+    bitfield32_update_bitcount(bf);
+  }
+  return bf->bitcount;
+}
 
 int bitfield32_cmp(bitfield32 a, bitfield32 b)
 {
@@ -48,24 +68,14 @@ int bitfield32_cmp(bitfield32 a, bitfield32 b)
 
 void bitfield32_set_bit(bitfield32 *bf, int bit)
 {
+  bf->bitcount_needs_update = 1;
   bf->data |= (1 << bit);
 }
 
 void bitfield32_unset_bit(bitfield32 *bf, int bit)
 {
+  bf->bitcount_needs_update = 1;
   bf->data &= ~(1 << bit);
-}
-
-bitfield32 bitfield32_or(bitfield32 a, bitfield32 b)
-{
-  bitfield32 ret = {0};
-  ret.data = a.data | b.data;
-  return ret;
-}
-
-void bitfield32_and(bitfield32 *a, bitfield32 b)
-{
-  a->data &= b.data;
 }
 
 typedef struct bitfield32_iter_st {
@@ -75,7 +85,7 @@ typedef struct bitfield32_iter_st {
 
 bitfield32_iter bitfield32_get_iter(bitfield32 bf)
 {
-  bitfield32_iter ret = {bf.data, 0};
+  bitfield32_iter ret = {bf, 0};
   return ret;
 }
 
@@ -151,7 +161,7 @@ struct analyse_result {
 //  log(sum(weight)) -
 //  (sum(weight * log(weight)) / sum(weight))
 //
-static float get_entropy(bitfield32 v, struct analyse_result *res)
+float get_entropy(bitfield32 v, struct analyse_result *res)
 {
   float sum = 0.0;
   float sum_weight_log = 0.0;
@@ -258,7 +268,7 @@ int hash_list_iter_next(struct hash_list_iter *iter, uint32_t *hash)
 uint32_t calculate_hash(enum direction_e direction, char *hash_buffer, int tile_size)
 {
   char *v_buffer = NULL;
-  if (direction == RIGHT || LEFT) {
+  if (direction & (RIGHT | LEFT)) {
     v_buffer = malloc(tile_size * 4);
   }
   int buffer_pos = 0;
@@ -345,7 +355,7 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
   char *hash_buffer = calloc(1, tile_size * tile_size * 4);
   SDL_Surface *surface = load_surface(name);
   int surface_width = surface->w;
-  int surface_height = surface->h;
+  //int surface_height = surface->h;
   int tiles_w = surface->w / tile_size;
   int tiles_h = surface->h / tile_size;
   ret->map = calloc(1, sizeof(*ret->map) * tiles_w * tiles_h);
@@ -410,7 +420,6 @@ void draw_input_map(struct analyse_result *result)
 {
   for(int y = 0; y < result->map_height; ++y) {
     for (int x = 0; x < result->map_width; ++x) {
-      SDL_Rect pos = {x * result->tile_size, y * result->tile_size, result->tile_size, result->tile_size};
       draw_tile(x * result->tile_size, y * result->tile_size, result->map[y * result->map_width + x], result);
     }
   }
@@ -426,14 +435,13 @@ void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
 {
   for(int y = 0; y < map->map_height; ++y) {
     for (int x = 0; x < map->map_width; ++x) {
-      SDL_Rect pos = {x * result->tile_size, y * result->tile_size, result->tile_size, result->tile_size};
       draw_tile_based_on_weight(x * result->tile_size, y * result->tile_size, map->map[y * map->map_width + x], result);
     }
   }
 }
 
 /* this binary-ands map position x/y with value and update neighbours recursively */
-/* returns 
+/* returns
  * -1 tile out of range
  *  0 nothing changed
  *  1 value was modified
@@ -445,10 +453,18 @@ void draw_map_with_weight(bitfield_map *map, struct analyse_result *result)
  */
 int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result *res)
 {
+  /* wo dont evaluate any tiles that are out-of-map */
   if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
     return -1;
   }
+
   bitfield32 *map_element = &map->map[y * map->map_width + x];
+
+  /* we dont modifie tiles when there are already collapsed (bitcount == 1) */
+  if (bitfield32_get_bitcount(map_element) == 1) {
+    return 0;
+  }
+
   bitfield32 old_value = *map_element;
 
   bitfield32_iter main_iter = bitfield32_get_iter(*map_element);
@@ -459,7 +475,6 @@ int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result
       int test_y = DIR_Y(dir, y);
       if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_width) {
         bitfield32 *test_element = &map->map[map->map_width * test_y + test_x];
-        bitfield32 allowed = {0};
         bitfield32_iter iter = bitfield32_get_iter(*test_element);
         int id;
         int match = 0;
@@ -493,6 +508,8 @@ int update_map_with_rules(bitfield_map *map, int x, int y, struct analyse_result
   return 0;
 }
 
+
+
 #include <time.h>
 
 int main() {
@@ -506,7 +523,7 @@ int main() {
   glob_renderer = SDL_CreateRenderer(glob_window, -1,
       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
-  SDL_RenderSetLogicalSize(glob_renderer, 64, 64);
+  SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 4);
 
   struct analyse_result *test = analyse_image("test.png", 4);
   print_analyse_result(test);
@@ -514,19 +531,14 @@ int main() {
   bitfield_map bf_map = {0};
   bf_map.map_width=10;
   bf_map.map_height=10;
-  bf_map.map = calloc(1, 10 * 10);
+  bf_map.map = calloc(1, 10 * 10 * sizeof(*bf_map.map));
   for(int i = 0; i < 10 * 10; ++i) {
     for(int b = 0; b < test->tile_count; ++b) {
       bitfield32_set_bit(&bf_map.map[i], b);
     }
   }
-  int tt = 1;
-  bitfield32_unset_bit(&bf_map.map[tt], 1);
-  bitfield32_unset_bit(&bf_map.map[tt], 2);
-  bitfield32_unset_bit(&bf_map.map[tt], 3);
-  bitfield32_unset_bit(&bf_map.map[tt], 4);
-  bitfield32_unset_bit(&bf_map.map[tt], 5);
-  printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 0, 0, test));
+  bitfield32_unset_bit(&bf_map.map[11], 0);
+  printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
 
   while (running) {
     SDL_Event event;
