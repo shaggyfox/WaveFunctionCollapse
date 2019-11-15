@@ -1,8 +1,6 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
-
-
 float my_random(void)
 {
   return ((float)rand()) /(float)RAND_MAX;
@@ -405,6 +403,15 @@ void analyse_map(struct analyse_result *result)
 
 SDL_Renderer *glob_renderer = NULL;
 
+void draw_rect(int x, int y, int w, int h, int r, int g, int b)
+{
+  SDL_Rect rect = {x, y, w, h};
+  SDL_SetRenderDrawColor(glob_renderer, r, g, b, 255);
+  SDL_RenderDrawRect(glob_renderer, &rect);
+  SDL_SetRenderDrawColor(glob_renderer, 0, 0, 0, 0);
+}
+
+
 struct analyse_result *analyse_image(char *name, int tile_size) {
   struct analyse_result *ret = calloc(1, sizeof(*ret));
   char *hash_buffer = calloc(1, tile_size * tile_size * 4);
@@ -511,6 +518,13 @@ void draw_map_with_weight(bitfield32_map *map, struct analyse_result *result)
  *  1 value was modified
  */
 
+struct error_condition {
+  int error;
+  int x;
+  int y;
+  int x0;
+  int y0;
+} glob_error_cond = {0};
 
 /* what's happening here?
  *
@@ -519,7 +533,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
 {
   /* wo dont evaluate any tiles that are out-of-map */
   if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
-    return -1;
+    return 0;
   }
 
   bitfield32 *map_element = &map->map[y * map->map_width + x];
@@ -563,15 +577,31 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
   }
   if (!bitfield32_cmp(old_value, *map_element)) {
 
-    /* recalculate entropy */
-    /* XXX ugly XXX */
-    map_element->entropy = get_entropy(*map_element, res);
+    switch (bitfield32_get_bitcount(map_element)) {
+      case 0:
+        /* ERROR condition */
+        glob_error_cond.x = x;
+        glob_error_cond.y = y;
+        glob_error_cond.error = 1;
+        return -1;
+      case 1:
+        /* resolved */
+        map_element->entropy = 0.0;
+        break;
+      default:
+        /* recalculate entropy */
+        /* XXX ugly XXX */
+        map_element->entropy = get_entropy(*map_element, res);
+        break;
+    }
 
     /* update neighbours */
     for (int dir = 0; dir < 4; ++dir) {
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
-      update_map_with_rules(map, test_x, test_y, res);
+      if (-1 == update_map_with_rules(map, test_x, test_y, res)) {
+        return -1;
+      }
     }
     return 1;
   }
@@ -659,6 +689,7 @@ int main() {
       switch(event.type) {
         case SDL_KEYDOWN:
           init_bitfield32_map(&bf_map, 25, 25, test);
+          glob_error_cond.error = 0;
           break;
         case SDL_QUIT:
           running = 0;
@@ -668,17 +699,28 @@ int main() {
     SDL_RenderClear(glob_renderer);
    // draw_input_map(test);
     int x, y;
-    if (0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
+    if (!glob_error_cond.error && 0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
+      /* set last set tile */
+      glob_error_cond.x0 = x;
+      glob_error_cond.y0 = y;
       bitfield32 *bf = &bf_map.map[y * bf_map.map_width + x];
       bitfield32_set_to(bf, select_tile_based_on_weight(*bf, test));
       /* update neighbours */
       for(int dir = 0; dir < 4; ++dir) {
          int test_x = DIR_X(dir, x);
          int test_y = DIR_Y(dir, y);
-         update_map_with_rules(&bf_map, test_x, test_y, test);
+         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, test)) {
+           break;
+         }
       }
     }
     draw_map_with_weight(&bf_map, test);
+    if (glob_error_cond.error) {
+      draw_rect(glob_error_cond.x0 * test->tile_size, glob_error_cond.y0 * test->tile_size,  test->tile_size, test->tile_size,
+          0, 255, 0);
+      draw_rect(glob_error_cond.x * test->tile_size, glob_error_cond.y * test->tile_size,  test->tile_size, test->tile_size,
+          255, 0, 0);
+    }
     SDL_RenderPresent(glob_renderer);
   }
 
