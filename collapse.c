@@ -106,7 +106,7 @@ int bitfield32_iter_next(bitfield32_iter *iter) {
   return -1;
 }
 
-#define SCREEN_WIDTH 640
+#define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 480
 
 enum direction_e{TOP, LEFT, BOTTOM, RIGHT};
@@ -551,7 +551,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
     for (int dir = 0; dir < 4; ++dir) {
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
-      if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_width) {
+      if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_height) {
         bitfield32 *test_element = &map->map[map->map_width * test_y + test_x];
         bitfield32_iter iter = bitfield32_get_iter(*test_element);
         int id;
@@ -651,8 +651,17 @@ float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int
 }
 
 #include <time.h>
-
-int main() {
+int main(int argc, char **argv) {
+  int scale = 4;
+  if (argc < 3) {
+    printf("Usage\ncollapse <image> <tile_size>\n");
+    return -1;
+  }
+  char *image_name = argv[1];
+  int tile_size = strtol(argv[2], NULL, 10);
+  if (argc >= 4) {
+    scale = strtol(argv[3], NULL, 10);
+  }
   srand(time(NULL));
   int running =1 ;
   SDL_Init(SDL_INIT_VIDEO);
@@ -663,9 +672,9 @@ int main() {
   glob_renderer = SDL_CreateRenderer(glob_window, -1,
       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
-  SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / 4, SCREEN_HEIGHT / 4);
+  SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / scale, SCREEN_HEIGHT / scale);
 
-  struct analyse_result *test = analyse_image("test.png", 4);
+  struct analyse_result *test = analyse_image(image_name, tile_size);
   print_analyse_result(test);
 
   bitfield32_map bf_map = {0};
@@ -679,16 +688,18 @@ int main() {
     }
   }
   */
-  init_bitfield32_map(&bf_map, 25, 25, test);
+  init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
+      (SCREEN_HEIGHT/scale)/test->tile_size, test);
+  glob_error_cond.error = 1;
   //printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
-
 
   while (running) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
       switch(event.type) {
         case SDL_KEYDOWN:
-          init_bitfield32_map(&bf_map, 25, 25, test);
+          init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
+             (SCREEN_HEIGHT/scale)/test->tile_size, test);
           glob_error_cond.error = 0;
           break;
         case SDL_QUIT:
