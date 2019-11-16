@@ -1,7 +1,7 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
-#define MAX_TILES 32
+#define MAX_TILES 64
 
 float my_random(void)
 {
@@ -41,14 +41,14 @@ typedef struct bitfield32_st {
   int bitcount_needs_update;
   int bitcount;
   float entropy; /* used external */
-  uint32_t data;
+  uint32_t data[MAX_TILES / 32];
 } bitfield32;
 
 void bitfield32_update_bitcount(bitfield32 *b)
 {
   b->bitcount = 0;
   for (int i = 0; i < MAX_TILES; ++i) {
-    if (b->data & (1u << i)) {
+    if (b->data[i / 32] & (1u << (i % 32))) {
       b->bitcount += 1;
     }
   }
@@ -64,26 +64,31 @@ int bitfield32_get_bitcount(bitfield32 *bf)
 
 int bitfield32_cmp(bitfield32 a, bitfield32 b)
 {
-  return a.data == b.data;
+  int ret = 1;
+  for(int i= 0 ; i < MAX_TILES / 32; ++i) {
+    ret = (ret && a.data[i] == b.data[i]);
+  }
+  return ret;
 }
 
 void bitfield32_set_bit(bitfield32 *bf, int bit)
 {
   bf->bitcount_needs_update = 1;
-  bf->data |= (1 << bit);
+  bf->data[bit /32] |= (1 << (bit % 32));
 }
 
 void bitfield32_set_to(bitfield32 *bf, int bit)
 {
   bf->bitcount_needs_update = 0;
   bf->bitcount = 1;
-  bf->data = 1u << bit;
+  memset(&bf->data, 0, sizeof(bf->data));
+  bf->data[bit / 32] = 1u << (bit % 32);
 }
 
 void bitfield32_unset_bit(bitfield32 *bf, int bit)
 {
   bf->bitcount_needs_update = 1;
-  bf->data &= ~(1 << bit);
+  bf->data[bit / 32] &= ~(1 << (bit % 32));
 }
 
 typedef struct bitfield32_iter_st {
@@ -99,7 +104,7 @@ bitfield32_iter bitfield32_get_iter(bitfield32 bf)
 
 int bitfield32_iter_next(bitfield32_iter *iter) {
   while (iter->pos < MAX_TILES) {
-    if (iter->bits.data & (1 << iter->pos)) {
+    if (iter->bits.data[iter->pos / 32] & (1 << (iter->pos % 32))) {
       iter->pos ++;
       return iter->pos -1;
     }
@@ -799,18 +804,18 @@ int main(int argc, char **argv) {
   }
 
   bitfield32 bf = {0};
-  for (int i = 0; i <= 8; ++i) {
+  for (int i = 0; i <= 43; ++i) {
     bitfield32_set_bit(&bf, i);
   }
   bitfield32_iter iter = bitfield32_get_iter(bf);
   for (int i = bitfield32_iter_next(&iter); i != -1; i = bitfield32_iter_next(&iter)) {
     printf("-> bit %d set\n", i);
   }
-  int result[9] = {0};
+  int result[43] = {0};
   for(int i = 0; i < 10000; ++i) {
     result[select_tile_based_on_weight(bf, test)] ++;
   }
-  for(int i = 0; i < 9; ++i) {
+  for(int i = 0; i < 43; ++i) {
     printf("%d: %d\n", i, result[i]);
   }
 #endif
