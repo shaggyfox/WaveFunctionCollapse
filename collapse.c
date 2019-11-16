@@ -1,5 +1,6 @@
 #include <SDL.h>
 #include <SDL_image.h>
+#include <assert.h>
 
 #define MAX_TILES 64
 
@@ -518,38 +519,98 @@ void draw_map_with_weight(bitfield32_map *map, struct analyse_result *result)
 }
 
 
-#define MAX_HISTORY 100
-typedef struct {
+#define MAX_HISTORY 10000
+#define HISTORY_FLAG_IN_USE 1
+#define HISTORY_FLAG_SAVEPOINT 2
+typedef struct bitfield32_history_element_st bitfield32_history_element;
+struct bitfield32_history_element_st {
+  bitfield32_history_element *next;
+  bitfield32_history_element *prev;
+  int flags;
   int x;
   int y;
+  int id;
   bitfield32 value;
-} bitfield32_history_element;
+};
+
 typedef struct {
   int pos;
+  int cnt;
+  int last_id;
   bitfield32_history_element e[MAX_HISTORY];
+  bitfield32_history_element *first;
+  bitfield32_history_element *last;
 } bitfield32_history;
 
-void bitfield32_map_history_rollback(bitfield32_map *map, bitfield32_history *history)
+#include <unistd.h>
+
+int bitfield32_map_history_rollback(bitfield32_map *map, bitfield32_history *history)
 {
-  for(int i = history->pos - 1; i >= 0; --i) {
-    int x = history->e[i].x;
-    int y = history->e[i].y;
-    bitfield32 v = history->e[i].value;
+  int ret = -1;
+  while (history->last) {
+  //printf("->%d\n", history->cnt);
+    int has_flag = history->last->flags & HISTORY_FLAG_SAVEPOINT;
+    int x = history->last->x;
+    int y = history->last->y;
+    int id = history->last->id;
+    bitfield32 v = history->last->value;
+    history->last->flags = 0; /* reset flags */
+    history->cnt -= 1;
     map->map[map->map_width * y + x] = v;
+    history->last = history->last->prev;
+    if (has_flag) {
+      history->last_id -= 1;
+      ret = id;
+      break;
+    }
   }
+  if (!history->last) {
+    history->first = NULL;
+  }
+  return ret;
 }
 
-void bitfield32_map_history_add(bitfield32_history *history, int x, int y, bitfield32 value)
+int bitfield32_map_history_add(bitfield32_history *history, int x, int y, bitfield32 value, int flags)
 {
-  if (history->pos < MAX_HISTORY) {
-    history->e[history->pos].x = x;
-    history->e[history->pos].y = y;
-    history->e[history->pos].value = value;
-    history->pos += 1;
+  bitfield32_history_element *e = NULL;
+  if (history->cnt == MAX_HISTORY) {
+    e = history->first;
+    history->first = e->next;
+    history->first->prev = NULL;
+    e->next = NULL;
+  } else {
+    history->cnt += 1;
+    //printf("-> ++ %d %d\n", history->cnt, flags);
+    while (!e) {
+      bitfield32_history_element *test =  &history->e[(history->pos ++)%MAX_HISTORY];
+      if (!(test->flags & HISTORY_FLAG_IN_USE)) {
+        e = test;
+      }
+    }
   }
+  e->x = x;
+  e->y = y;
+  e->value = value;
+  e->flags = flags | HISTORY_FLAG_IN_USE;
+  if (flags & HISTORY_FLAG_SAVEPOINT) {
+    e->id = history->last_id ++;
+  }
+  e->prev = history->last;
+  if (history->last) {
+    history->last->next = e;
+  }
+  history->last = e;
+  if (!history->first) {
+    history->first = e;
+  }
+  return 0;
 }
 
 bitfield32_history glob_history = {0};
+int retry_cnt = 0;
+int last_id = 0;
+int rollback_cnt = 0;
+#define MAX_RETRIES 10
 
 /* this binary-ands map position x/y with value and update neighbours recursively */
 /* returns
@@ -617,7 +678,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
   }
   if (!bitfield32_cmp(old_value, *map_element)) {
     /* add changed value to history */
-    bitfield32_map_history_add(&glob_history, x, y, old_value);
+    bitfield32_map_history_add(&glob_history, x, y, old_value, 0);
     switch (bitfield32_get_bitcount(map_element)) {
       case 0:
         /* ERROR condition */
@@ -720,19 +781,12 @@ int main(int argc, char **argv) {
   print_analyse_result(test);
 
   bitfield32_map bf_map = {0};
-  /*
-  bf_map.map_width=10;
-  bf_map.map_height=10;
-  bf_map.map = calloc(1, 10 * 10 * sizeof(*bf_map.map));
-  for(int i = 0; i < 10 * 10; ++i) {
-    for(int b = 0; b < test->tile_count; ++b) {
-      bitfield32_set_bit(&bf_map.map[i], b);
-    }
-  }
-  */
+
   init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
       (SCREEN_HEIGHT/scale)/test->tile_size, test);
-  //printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
+  memset(&glob_history, 0, sizeof(glob_history));
+  retry_cnt = 0;
+  last_id = 0;
 
   while (running) {
     SDL_Event event;
@@ -752,6 +806,9 @@ int main(int argc, char **argv) {
           init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
               (SCREEN_HEIGHT/scale)/test->tile_size, test);
           glob_error_cond.error = 0;
+          memset(&glob_history, 0, sizeof(glob_history));
+          retry_cnt = 0;
+          last_id = 0;
           break;
         case SDL_QUIT:
           running = 0;
@@ -759,7 +816,7 @@ int main(int argc, char **argv) {
       }
     }
     SDL_RenderClear(glob_renderer);
-   // draw_input_map(test);
+    // draw_input_map(test);
     int x, y;
     if (!glob_error_cond.error && 0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
       /* set last set tile */
@@ -767,9 +824,7 @@ int main(int argc, char **argv) {
       glob_error_cond.y0 = y;
       bitfield32 *bf = &bf_map.map[y * bf_map.map_width + x];
 
-      glob_history.pos = 0; /* reset history */
-      bitfield32_map_history_add(&glob_history, x, y, *bf);
-
+      bitfield32_map_history_add(&glob_history, x, y, *bf, HISTORY_FLAG_SAVEPOINT);
       bitfield32_set_to(bf, select_tile_based_on_weight(*bf, test));
       /* update neighbours */
       for(int dir = 0; dir < 4; ++dir) {
@@ -786,7 +841,25 @@ int main(int argc, char **argv) {
           0, 255, 0);
       draw_rect(glob_error_cond.x * test->tile_size, glob_error_cond.y * test->tile_size,  test->tile_size, test->tile_size,
           255, 0, 0);
-      bitfield32_map_history_rollback(&bf_map, &glob_history);
+      int id = bitfield32_map_history_rollback(&bf_map, &glob_history);
+      assert(id >= 0);
+      if (id <= last_id) {
+        retry_cnt += 1;
+        if (retry_cnt > 10) {
+          printf("left states =%d\n", glob_history.cnt);
+          printf("last_id = %d (%d)\n", last_id, id);
+          printf("roll-back-back: %i\n", rollback_cnt);
+          for(int i = 0; i < rollback_cnt; ++i) {
+            bitfield32_map_history_rollback(&bf_map, &glob_history);
+          }
+          retry_cnt = 0;
+          rollback_cnt += 1;
+        }
+      } else {
+        last_id = id;
+        retry_cnt = 0;
+        rollback_cnt = 0;
+      }
       glob_error_cond.error = 0;
     }
     SDL_RenderPresent(glob_renderer);
