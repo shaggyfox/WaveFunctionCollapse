@@ -1,6 +1,8 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+#define MAX_TILES 32
+
 float my_random(void)
 {
   return ((float)rand()) /(float)RAND_MAX;
@@ -45,7 +47,7 @@ typedef struct bitfield32_st {
 void bitfield32_update_bitcount(bitfield32 *b)
 {
   b->bitcount = 0;
-  for (int i = 0; i < 32; ++i) {
+  for (int i = 0; i < MAX_TILES; ++i) {
     if (b->data & (1u << i)) {
       b->bitcount += 1;
     }
@@ -96,7 +98,7 @@ bitfield32_iter bitfield32_get_iter(bitfield32 bf)
 }
 
 int bitfield32_iter_next(bitfield32_iter *iter) {
-  while (iter->pos < 32) {
+  while (iter->pos < MAX_TILES) {
     if (iter->bits.data & (1 << iter->pos)) {
       iter->pos ++;
       return iter->pos -1;
@@ -231,7 +233,7 @@ float get_entropy(bitfield32 v, struct analyse_result *res)
 
 int select_tile_based_on_weight(bitfield32 bits, struct analyse_result *result)
 {
-  struct weighted_element e[32];
+  struct weighted_element e[MAX_TILES];
   int cnt = 0;
   bitfield32_iter i = bitfield32_get_iter(bits);
   int id;
@@ -466,10 +468,10 @@ void draw_tile(int x, int y, int tile_id, struct analyse_result *res)
 
 void draw_tile_based_on_weight(int x, int y, bitfield32 bits, struct analyse_result *res)
 {
-  float w[32] = {0.0};
+  float w[MAX_TILES] = {0.0};
   float sum = 0;
   int cnt = 0;
-  int ids[32];
+  int ids[MAX_TILES];
   bitfield32_iter iter = bitfield32_get_iter(bits);
   int id;
   while (-1 != (id = bitfield32_iter_next(&iter))) {
@@ -510,6 +512,39 @@ void draw_map_with_weight(bitfield32_map *map, struct analyse_result *result)
   }
 }
 
+
+#define MAX_HISTORY 100
+typedef struct {
+  int x;
+  int y;
+  bitfield32 value;
+} bitfield32_history_element;
+typedef struct {
+  int pos;
+  bitfield32_history_element e[MAX_HISTORY];
+} bitfield32_history;
+
+void bitfield32_map_history_rollback(bitfield32_map *map, bitfield32_history *history)
+{
+  for(int i = history->pos - 1; i >= 0; --i) {
+    int x = history->e[i].x;
+    int y = history->e[i].y;
+    bitfield32 v = history->e[i].value;
+    map->map[map->map_width * y + x] = v;
+  }
+}
+
+void bitfield32_map_history_add(bitfield32_history *history, int x, int y, bitfield32 value)
+{
+  if (history->pos < MAX_HISTORY) {
+    history->e[history->pos].x = x;
+    history->e[history->pos].y = y;
+    history->e[history->pos].value = value;
+    history->pos += 1;
+  }
+}
+
+bitfield32_history glob_history = {0};
 
 /* this binary-ands map position x/y with value and update neighbours recursively */
 /* returns
@@ -576,7 +611,8 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
     }
   }
   if (!bitfield32_cmp(old_value, *map_element)) {
-
+    /* add changed value to history */
+    bitfield32_map_history_add(&glob_history, x, y, old_value);
     switch (bitfield32_get_bitcount(map_element)) {
       case 0:
         /* ERROR condition */
@@ -650,6 +686,7 @@ float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int
   return smalest;
 }
 
+
 #include <time.h>
 int main(int argc, char **argv) {
   int scale = 4;
@@ -690,7 +727,6 @@ int main(int argc, char **argv) {
   */
   init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
       (SCREEN_HEIGHT/scale)/test->tile_size, test);
-  glob_error_cond.error = 1;
   //printf(" update rnuaire %d\n", update_map_with_rules(&bf_map, 1, 2, test));
 
   while (running) {
@@ -698,8 +734,18 @@ int main(int argc, char **argv) {
     while (SDL_PollEvent(&event)) {
       switch(event.type) {
         case SDL_KEYDOWN:
+#if 0
+          if (glob_error_cond.error) {
+            /* reset history */
+            bitfield32_map_history_rollback(&bf_map, &glob_history);
+          } else {
+            init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
+               (SCREEN_HEIGHT/scale)/test->tile_size, test);
+          }
+#endif
+          free(bf_map.map);
           init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-             (SCREEN_HEIGHT/scale)/test->tile_size, test);
+              (SCREEN_HEIGHT/scale)/test->tile_size, test);
           glob_error_cond.error = 0;
           break;
         case SDL_QUIT:
@@ -715,6 +761,10 @@ int main(int argc, char **argv) {
       glob_error_cond.x0 = x;
       glob_error_cond.y0 = y;
       bitfield32 *bf = &bf_map.map[y * bf_map.map_width + x];
+
+      glob_history.pos = 0; /* reset history */
+      bitfield32_map_history_add(&glob_history, x, y, *bf);
+
       bitfield32_set_to(bf, select_tile_based_on_weight(*bf, test));
       /* update neighbours */
       for(int dir = 0; dir < 4; ++dir) {
@@ -731,6 +781,8 @@ int main(int argc, char **argv) {
           0, 255, 0);
       draw_rect(glob_error_cond.x * test->tile_size, glob_error_cond.y * test->tile_size,  test->tile_size, test->tile_size,
           255, 0, 0);
+      bitfield32_map_history_rollback(&bf_map, &glob_history);
+      glob_error_cond.error = 0;
     }
     SDL_RenderPresent(glob_renderer);
   }
