@@ -204,11 +204,13 @@ struct analyse_result {
   int tile_size;
   int tile_count;
   struct tiles {
-    SDL_Rect rect;
+    uint32_t *tile_data;         /* bit data from surface */
+    SDL_Rect rect;              /* position of tile */
     uint32_t bit;               /* bit-id */
     uint32_t hash;              /* hash value of tile */
     uint32_t hash_dir[4];       /* hash value for each side */
     struct hash_list allowed_neighbour_hashes[4];
+    bitfield32 allowed_neighbours[4];
     float weight;
   } *tiles;
   uint32_t map_width;
@@ -216,7 +218,6 @@ struct analyse_result {
   uint32_t *map;
   SDL_Texture *texture;
 };
-
 
 //shannon_entropy_for_square =
 //  log(sum(weight)) -
@@ -385,6 +386,56 @@ int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t direct
     new_entry->hash_dir[dir] = directions[dir];
   }
   return ret->tile_count - 1;
+}
+
+int overlap_add_tile_to_index2(struct analyse_result *ret, uint32_t *tile_data)
+{
+  /* hash data */
+  uint32_t hash = murmur3_32((uint8_t*)tile_data, ret->tile_size * ret->tile_size, 1234);
+  /* try to find tile (by hash) */
+  for (int i = 0; i < ret->tile_count; ++i) {
+    if (hash == ret->tiles[i].hash) {
+      /* if hash matches increment weight on tile */
+      ret->tiles[i].weight += 1;
+      return i;
+    }
+  }
+  /* else add new element */
+  ret->tiles =  realloc(ret->tiles, (ret->tile_count +1) * sizeof(*ret->tiles));
+  struct tiles *new_entry = &ret->tiles[ret->tile_count++];
+  memset(new_entry, 0, sizeof(*new_entry));
+  new_entry->weight = 1;
+  new_entry->tile_data = malloc(sizeof(uint32_t) * ret->tile_size * ret->tile_size);
+  memcpy(new_entry->tile_data, tile_data, sizeof(uint32_t) * ret->tile_size * ret->tile_size);
+  return ret->tile_count - 1;
+}
+
+int overlap_tilles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e dir, int tile_size)
+{
+  switch (dir) {
+    case TOP:
+      return !memcmp(tile_a, &tile_b[tile_size], tile_size * (tile_size - 1)* sizeof(*tile_a));
+      break;
+    case LEFT:
+      for(int i = 0; i < tile_size; ++i) {
+        if (memcmp(&tile_a[i * tile_size], &tile_b[i * tile_size + 1], tile_size - 1)) {
+          return 0;
+        }
+      }
+      return 1;
+      break;
+    case BOTTOM:
+      return !memcmp(&tile_a[tile_size], tile_b, tile_size * (tile_size - 1) * sizeof(tile_a));
+      break;
+    case RIGHT:
+      for(int i = 0; i < tile_size; ++i) {
+        if (memcmp(&tile_a[i * tile_size + 1], &tile_b[i * tile_size], tile_size - 1)) {
+          return 0;
+        }
+      }
+      return 1;
+      break;
+  }
 }
 
 void analyse_map(struct analyse_result *result)
