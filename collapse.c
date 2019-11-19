@@ -410,7 +410,7 @@ int overlap_add_tile_to_index2(struct analyse_result *ret, uint32_t *tile_data)
   return ret->tile_count - 1;
 }
 
-int overlap_tilles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e dir, int tile_size)
+int overlap_tiles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e dir, int tile_size)
 {
   switch (dir) {
     case TOP:
@@ -436,6 +436,45 @@ int overlap_tilles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e d
       return 1;
       break;
   }
+  return -1;
+}
+
+void overlap_get_tile_data(uint32_t *data, int data_w, int data_h, uint32_t *ret, int x, int y, int width, int height)
+{
+  for(int tile_y = 0; tile_y < height; ++tile_y) {
+    for (int tile_x = 0; tile_x < width; ++tile_x) {
+      ret[tile_y * width + tile_x] = data[(y % data_h) * data_w + (x % data_w)];
+    }
+  }
+}
+
+void overlap_analyse_tiles(struct analyse_result *res)
+{
+  for(int tile_a = 0; tile_a < res->tile_count; ++tile_a) {
+    for( int tile_b = 0; tile_b < res->tile_count; ++tile_b) {
+      for(int dir = 0; dir < 4; ++dir) {
+        if (overlap_tiles_attach(res->tiles[tile_a].tile_data, res->tiles[tile_b].tile_data, dir, res->tile_size)) {
+          bitfield32_set_bit(&res->tiles[tile_a].allowed_neighbours[dir], tile_b);
+        }
+      }
+    }
+  }
+}
+
+struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
+  struct analyse_result *ret = calloc(1, sizeof(*ret));
+  SDL_Surface *surface = load_surface(name);
+  int surface_width = surface->w;
+  int surface_height = surface->h;
+  uint32_t *tile_data = malloc(sizeof(uint32_t) * ret->tile_size * ret->tile_size);
+  for (int y = 0; y < surface_height; ++y) {
+    for (int x = 0; x < surface_width; ++x) {
+      overlap_get_tile_data(surface->pixels, surface_width, surface_height, tile_data, x, y, ret->tile_size, ret->tile_size);
+      overlap_add_tile_to_index2(ret, tile_data);
+    }
+  }
+  overlap_analyse_tiles(ret);
+  return ret;
 }
 
 void analyse_map(struct analyse_result *result)
@@ -829,6 +868,7 @@ int main(int argc, char **argv) {
   SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / scale, SCREEN_HEIGHT / scale);
 
   struct analyse_result *test = analyse_image(image_name, tile_size);
+  struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size);
   print_analyse_result(test);
 
   bitfield32_map bf_map = {0};
@@ -917,6 +957,7 @@ int main(int argc, char **argv) {
   }
 
   SDL_Quit();
+
 #if 0
   struct weighted_element e[3] = {{.weight=2, .id=0}, {.weight=1, .id=1}, {.weight=1, .id=2}};
   int result[3] = {0,0,0};
