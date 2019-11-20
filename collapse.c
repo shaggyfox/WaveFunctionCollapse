@@ -3,7 +3,7 @@
 #include <SDL_image.h>
 #include <assert.h>
 
-#define MAX_TILES 1024
+#define MAX_TILES 512
 
 float my_random(void)
 {
@@ -94,6 +94,22 @@ void bitfield32_unset_bit(bitfield32 *bf, int bit)
   bf->data[bit / 32] &= ~(1 << (bit % 32));
 }
 
+void bitfield32_and(bitfield32 *a, bitfield32 *b)
+{
+  a->bitcount_needs_update = 1;
+  for(int i = 0; i < MAX_TILES / 32; ++i) {
+    a->data[i] &= b->data[i];
+  }
+}
+
+static inline void bitfield32_or(bitfield32 *a, bitfield32 *b)
+{
+  a->bitcount_needs_update = 1;
+  for(int i = 0; i < MAX_TILES / 32; ++i) {
+    a->data[i] |= b->data[i];
+  }
+}
+
 typedef struct bitfield32_iter_st {
   bitfield32 bits;
   int pos;
@@ -105,7 +121,7 @@ bitfield32_iter bitfield32_get_iter(bitfield32 bf)
   return ret;
 }
 
-int bitfield32_iter_next(bitfield32_iter *iter) {
+static inline int bitfield32_iter_next(bitfield32_iter *iter) {
   while (iter->pos < MAX_TILES) {
     if (iter->bits.data[iter->pos / 32] & (1 << (iter->pos % 32))) {
       iter->pos ++;
@@ -201,6 +217,8 @@ struct hash_list
   int count;
   uint32_t *values;
 };
+
+typedef bitfield32 (*allowed_neighbours_cache)[4];
 
 struct analyse_result {
   int tile_size;
@@ -439,6 +457,7 @@ int overlap_tiles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e di
       return 1;
       break;
   }
+  assert(0);
   return -1;
 }
 
@@ -463,6 +482,7 @@ void overlap_analyse_tiles(struct analyse_result *res)
     }
   }
 }
+
 
 SDL_Renderer *glob_renderer = NULL;
 
@@ -501,10 +521,11 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
     SDL_Rect src_rect = {0, 0, ret->tile_size, ret->tile_size};
     SDL_Rect dst_rect = {x * ret->tile_size, y * ret->tile_size, ret->tile_size, ret->tile_size};
     SDL_BlitSurface(tile_surface, &src_rect, tmp_surface, &dst_rect);
-
+    ret->tiles[i].rect.x = x * ret->tile_size;
+    ret->tiles[i].rect.y = y * ret->tile_size;
+    ret->tiles[i].rect.w = 1;
+    ret->tiles[i].rect.h = 1;
   }
-
-  printf("%d %d\n", tmp_surface->w, tmp_surface->h);
   ret->texture = SDL_CreateTextureFromSurface(glob_renderer, tmp_surface);
   SDL_FreeSurface(tmp_surface);
 
@@ -613,7 +634,8 @@ void draw_tile_based_on_weight(int x, int y, bitfield32 bits, struct analyse_res
   SDL_SetTextureBlendMode(res->texture, SDL_BLENDMODE_BLEND);
   for (int i = 0; i < cnt; ++i) {
     SDL_SetTextureAlphaMod(res->texture, (w[i] / sum) * 255.0);
-    SDL_Rect rect = {x, y, res->tile_size, res->tile_size};
+    //SDL_Rect rect = {x, y, res->tile_size, res->tile_size};
+    SDL_Rect rect = {x, y, 1, 1};
     SDL_RenderCopy(glob_renderer, res->texture, &res->tiles[ids[i]].rect, &rect);
   }
 }
@@ -631,16 +653,41 @@ typedef struct bitfield32_map {
   int map_width;
   int map_height;
   bitfield32 *map;
+  allowed_neighbours_cache cache;
 } bitfield32_map;
 
 void draw_map_with_weight(bitfield32_map *map, struct analyse_result *result)
 {
   for(int y = 0; y < map->map_height; ++y) {
     for (int x = 0; x < map->map_width; ++x) {
-      draw_tile_based_on_weight(x * result->tile_size, y * result->tile_size, map->map[y * map->map_width + x], result);
+      draw_tile_based_on_weight(x, y, map->map[y * map->map_width + x], result);
     }
   }
 }
+
+void update_allowed_neighbours_cache(struct bitfield32_map *map, int x, int y, struct analyse_result *res)
+{
+  for (int dir = 0; dir < 4; ++dir) {
+    int id;
+    bitfield32 allowed_tiles = {0};
+    bitfield32_iter iter = bitfield32_get_iter(map->map[map->map_width * y + x]);
+    while (-1 != (id = bitfield32_iter_next(&iter))) {
+      bitfield32_or(&allowed_tiles, &res->tiles[id].allowed_neighbours[dir]);
+    }
+    map->cache[map->map_width * y + x][dir] = allowed_tiles;
+  }
+}
+
+void init_allowed_neighbours_cache(struct bitfield32_map *map, struct analyse_result *res)
+{
+  map->cache = malloc(sizeof(*map->cache) * map->map_width * map->map_height);
+  for(int y = 0; y < map->map_height; ++y) {
+    for (int x = 0; x < map->map_width; ++x) {
+      update_allowed_neighbours_cache(map, x, y, res);
+    }
+  }
+}
+
 
 
 #define MAX_HISTORY 10000
@@ -777,6 +824,18 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
       if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_height) {
+        //int id;
+        //bitfield32 *test_element = &map->map[map->map_width * test_y + test_x];
+        //bitfield32_iter iter = bitfield32_get_iter(*test_element);
+        //bitfield32 allowed_tiles = {0};
+#if 0
+        while (-1 != (id = bitfield32_iter_next(&iter))) {
+          bitfield32_or(&allowed_tiles, &res->tiles[id].allowed_neighbours[OPOSITE_DIRECTION(dir)]);
+        }
+#endif
+        //bitfield32_and(map_element, &allowed_tiles);
+        bitfield32_and(map_element, &map->cache[map->map_width * test_y + test_x][OPOSITE_DIRECTION(dir)]);
+#if 0
         bitfield32 *test_element = &map->map[map->map_width * test_y + test_x];
         bitfield32_iter iter = bitfield32_get_iter(*test_element);
         int id;
@@ -797,12 +856,14 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
           bitfield32_unset_bit(map_element, main_id);
           break;
         }
+#endif
       }
     }
   }
   if (!bitfield32_cmp(old_value, *map_element)) {
     /* add changed value to history */
-    bitfield32_map_history_add(&glob_history, x, y, old_value, 0);
+    //bitfield32_map_history_add(&glob_history, x, y, old_value, 0);
+    update_allowed_neighbours_cache(map, x, y, res);
     switch (bitfield32_get_bitcount(map_element)) {
       case 0:
         /* ERROR condition */
@@ -845,10 +906,11 @@ void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_resul
       bitfield32_set_bit(&map->map[i], b);
     }
   }
+  init_allowed_neighbours_cache(map, res);
   /* initial update */
   for(int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-      update_map_with_rules(map, x, y, res);
+     update_map_with_rules(map, x, y, res);
     }
   }
   /* calculate entropy */
@@ -897,18 +959,19 @@ int main(int argc, char **argv) {
       SCREEN_WIDTH, SCREEN_HEIGHT, 0);
 
   glob_renderer = SDL_CreateRenderer(glob_window, -1,
-      SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+      SDL_RENDERER_SOFTWARE/*SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC*/);
 
   SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / scale, SCREEN_HEIGHT / scale);
 
   struct analyse_result *test = analyse_image(image_name, tile_size);
   struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size);
  // print_analyse_result(test);
+ printf("tile_cnt = %d\n", overlap_result->tile_count);
 
   bitfield32_map bf_map = {0};
 
   init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-      (SCREEN_HEIGHT/scale)/test->tile_size, test);
+      (SCREEN_HEIGHT/scale)/test->tile_size, overlap_result);
   memset(&glob_history, 0, sizeof(glob_history));
   retry_cnt = 0;
   last_id = 0;
@@ -929,7 +992,7 @@ int main(int argc, char **argv) {
 #endif
           free(bf_map.map);
           init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-              (SCREEN_HEIGHT/scale)/test->tile_size, test);
+              (SCREEN_HEIGHT/scale)/test->tile_size, overlap_result);
           glob_error_cond.error = 0;
           memset(&glob_history, 0, sizeof(glob_history));
           retry_cnt = 0;
@@ -940,11 +1003,11 @@ int main(int argc, char **argv) {
           break;
       }
     }
-    SDL_SetRenderDrawColor(glob_renderer, 100, 100, 100, 255);
+   // SDL_SetRenderDrawColor(glob_renderer, 100, 100, 100, 255);
     SDL_RenderClear(glob_renderer);
-    SDL_RenderCopy(glob_renderer, overlap_result->texture, NULL, NULL);
+     //SDL_RenderCopy(glob_renderer, overlap_result->texture, NULL, NULL);
+    //draw_map_with_weight(&bf_map, overlap_result);
     // draw_input_map(test);
-#if 0
     int x, y;
     if (!glob_error_cond.error && 0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
       /* set last set tile */
@@ -952,18 +1015,20 @@ int main(int argc, char **argv) {
       glob_error_cond.y0 = y;
       bitfield32 *bf = &bf_map.map[y * bf_map.map_width + x];
 
-      bitfield32_map_history_add(&glob_history, x, y, *bf, HISTORY_FLAG_SAVEPOINT);
-      bitfield32_set_to(bf, select_tile_based_on_weight(*bf, test));
+      //bitfield32_map_history_add(&glob_history, x, y, *bf, HISTORY_FLAG_SAVEPOINT);
+      bitfield32_set_to(bf, select_tile_based_on_weight(*bf, overlap_result));
+      update_allowed_neighbours_cache(&bf_map, x, y, overlap_result);
       /* update neighbours */
       for(int dir = 0; dir < 4; ++dir) {
          int test_x = DIR_X(dir, x);
          int test_y = DIR_Y(dir, y);
-         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, test)) {
+         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result)) {
            break;
          }
       }
     }
-    draw_map_with_weight(&bf_map, test);
+    draw_map_with_weight(&bf_map, overlap_result);
+#if 0
     if (glob_error_cond.error) {
       draw_rect(glob_error_cond.x0 * test->tile_size, glob_error_cond.y0 * test->tile_size,  test->tile_size, test->tile_size,
           0, 255, 0);

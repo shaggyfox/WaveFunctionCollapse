@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.12.4)
 project (WaveFunctionCollapse)
 
+  SET(CMAKE_C_COMPILER gcc8)
   find_package(PkgConfig)
   pkg_check_modules(SDL2 sdl2 REQUIRED)
   pkg_check_modules(SDL2_IMAGE SDL2_image REQUIRED)
