@@ -391,7 +391,7 @@ int add_tile_to_index(struct analyse_result *ret, uint32_t hash, uint32_t direct
 int overlap_add_tile_to_index2(struct analyse_result *ret, uint32_t *tile_data)
 {
   /* hash data */
-  uint32_t hash = murmur3_32((uint8_t*)tile_data, ret->tile_size * ret->tile_size, 1234);
+  uint32_t hash = murmur3_32((uint8_t*)tile_data, ret->tile_size * ret->tile_size * 4, 1234);
   /* try to find tile (by hash) */
   for (int i = 0; i < ret->tile_count; ++i) {
     if (hash == ret->tiles[i].hash) {
@@ -404,6 +404,7 @@ int overlap_add_tile_to_index2(struct analyse_result *ret, uint32_t *tile_data)
   ret->tiles =  realloc(ret->tiles, (ret->tile_count +1) * sizeof(*ret->tiles));
   struct tiles *new_entry = &ret->tiles[ret->tile_count++];
   memset(new_entry, 0, sizeof(*new_entry));
+  new_entry->hash = hash;
   new_entry->weight = 1;
   new_entry->tile_data = malloc(sizeof(uint32_t) * ret->tile_size * ret->tile_size);
   memcpy(new_entry->tile_data, tile_data, sizeof(uint32_t) * ret->tile_size * ret->tile_size);
@@ -443,7 +444,7 @@ void overlap_get_tile_data(uint32_t *data, int data_w, int data_h, uint32_t *ret
 {
   for(int tile_y = 0; tile_y < height; ++tile_y) {
     for (int tile_x = 0; tile_x < width; ++tile_x) {
-      ret[tile_y * width + tile_x] = data[(y % data_h) * data_w + (x % data_w)];
+      ret[tile_y * width + tile_x] = data[((y+tile_y) % data_h) * data_w + ((x+tile_x) % data_w)];
     }
   }
 }
@@ -461,8 +462,11 @@ void overlap_analyse_tiles(struct analyse_result *res)
   }
 }
 
+SDL_Renderer *glob_renderer = NULL;
+
 struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
   struct analyse_result *ret = calloc(1, sizeof(*ret));
+  ret->tile_size = tile_size;
   SDL_Surface *surface = load_surface(name);
   int surface_width = surface->w;
   int surface_height = surface->h;
@@ -474,6 +478,37 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
     }
   }
   overlap_analyse_tiles(ret);
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+  uint32_t rmask = 0xff000000;
+  uint32_t gmask = 0x00ff0000;
+  uint32_t bmask = 0x0000ff00;
+  uint32_t amask = 0x000000ff;
+#else
+  uint32_t rmask = 0x000000ff;
+  uint32_t gmask = 0x0000ff00;
+  uint32_t bmask = 0x00ff0000;
+  uint32_t amask = 0xff00000;
+#endif
+  int surface_w = ceilf(sqrtf(ret->tile_count));
+  int surface_h = surface_w;
+  SDL_Surface *tmp_surface = SDL_CreateRGBSurface(0,
+      surface_w * ret->tile_size,
+      surface_h *  ret->tile_size,
+      32,
+      rmask, gmask, bmask, amask);
+  for (int i = 0; i < ret->tile_count; ++i) {
+    SDL_Surface *tile_surface =
+      SDL_CreateRGBSurfaceFrom(ret->tiles[i].tile_data,ret->tile_size, ret->tile_size, 32, ret->tile_size * 4, rmask, gmask, bmask, amask);
+    int x = i % surface_w;
+    int y = i / surface_w;
+    SDL_Rect src_rect = {0, 0, ret->tile_size, ret->tile_size};
+    SDL_Rect dst_rect = {x * ret->tile_size, y * ret->tile_size, ret->tile_size, ret->tile_size};
+    SDL_BlitSurface(tile_surface, &src_rect, tmp_surface, &dst_rect);
+  }
+
+  ret->texture = SDL_CreateTextureFromSurface(glob_renderer, tmp_surface);
+  SDL_FreeSurface(tmp_surface);
+
   return ret;
 }
 
@@ -498,8 +533,6 @@ void analyse_map(struct analyse_result *result)
     }
   }
 }
-
-SDL_Renderer *glob_renderer = NULL;
 
 void draw_rect(int x, int y, int w, int h, int r, int g, int b)
 {
@@ -907,7 +940,9 @@ int main(int argc, char **argv) {
       }
     }
     SDL_RenderClear(glob_renderer);
+    SDL_RenderCopy(glob_renderer, overlap_result->texture, NULL, NULL);
     // draw_input_map(test);
+#if 0
     int x, y;
     if (!glob_error_cond.error && 0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
       /* set last set tile */
@@ -953,6 +988,7 @@ int main(int argc, char **argv) {
       }
       glob_error_cond.error = 0;
     }
+#endif
     SDL_RenderPresent(glob_renderer);
   }
 
