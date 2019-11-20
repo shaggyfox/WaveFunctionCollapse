@@ -1,8 +1,9 @@
 #include <SDL.h>
+#include <SDL_pixels.h>
 #include <SDL_image.h>
 #include <assert.h>
 
-#define MAX_TILES 64
+#define MAX_TILES 1024
 
 float my_random(void)
 {
@@ -74,6 +75,7 @@ int bitfield32_cmp(bitfield32 a, bitfield32 b)
 
 void bitfield32_set_bit(bitfield32 *bf, int bit)
 {
+  assert(bit < MAX_TILES);
   bf->bitcount_needs_update = 1;
   bf->data[bit /32] |= (1 << (bit % 32));
 }
@@ -189,7 +191,7 @@ static uint32_t adler32(const void *buf, size_t buflength) {
 SDL_Surface *load_surface(char *data)
 {
   SDL_Surface *tmp_surface = IMG_Load(data);
-  SDL_Surface *surface = SDL_ConvertSurfaceFormat(tmp_surface, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_Surface *surface = SDL_ConvertSurfaceFormat(tmp_surface, SDL_PIXELFORMAT_RGBA8888, 0);
   SDL_FreeSurface(tmp_surface);
   return surface;
 }
@@ -419,18 +421,18 @@ int overlap_tiles_attach(uint32_t *tile_a, uint32_t *tile_b, enum direction_e di
       break;
     case LEFT:
       for(int i = 0; i < tile_size; ++i) {
-        if (memcmp(&tile_a[i * tile_size], &tile_b[i * tile_size + 1], tile_size - 1)) {
+        if (memcmp(&tile_a[i * tile_size], &tile_b[i * tile_size + 1], (tile_size - 1) * sizeof(*tile_a))) {
           return 0;
         }
       }
       return 1;
       break;
     case BOTTOM:
-      return !memcmp(&tile_a[tile_size], tile_b, tile_size * (tile_size - 1) * sizeof(tile_a));
+      return !memcmp(&tile_a[tile_size], tile_b, tile_size * (tile_size - 1) * sizeof(*tile_a));
       break;
     case RIGHT:
       for(int i = 0; i < tile_size; ++i) {
-        if (memcmp(&tile_a[i * tile_size + 1], &tile_b[i * tile_size], tile_size - 1)) {
+        if (memcmp(&tile_a[i * tile_size + 1], &tile_b[i * tile_size], (tile_size - 1) * sizeof(*tile_a))) {
           return 0;
         }
       }
@@ -478,17 +480,12 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
     }
   }
   overlap_analyse_tiles(ret);
-#if SDL_BYTEORDER == SDL_BIG_ENDIAN
   uint32_t rmask = 0xff000000;
   uint32_t gmask = 0x00ff0000;
   uint32_t bmask = 0x0000ff00;
   uint32_t amask = 0x000000ff;
-#else
-  uint32_t rmask = 0x000000ff;
-  uint32_t gmask = 0x0000ff00;
-  uint32_t bmask = 0x00ff0000;
-  uint32_t amask = 0xff00000;
-#endif
+  int bpp = 0;
+  SDL_PixelFormatEnumToMasks (SDL_PIXELFORMAT_RGBA8888, &bpp, &rmask, &gmask, &bmask, &amask);
   int surface_w = ceilf(sqrtf(ret->tile_count));
   int surface_h = surface_w;
   SDL_Surface *tmp_surface = SDL_CreateRGBSurface(0,
@@ -504,8 +501,10 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size) {
     SDL_Rect src_rect = {0, 0, ret->tile_size, ret->tile_size};
     SDL_Rect dst_rect = {x * ret->tile_size, y * ret->tile_size, ret->tile_size, ret->tile_size};
     SDL_BlitSurface(tile_surface, &src_rect, tmp_surface, &dst_rect);
+
   }
 
+  printf("%d %d\n", tmp_surface->w, tmp_surface->h);
   ret->texture = SDL_CreateTextureFromSurface(glob_renderer, tmp_surface);
   SDL_FreeSurface(tmp_surface);
 
@@ -572,6 +571,7 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
       SDL_Rect rect = {tiles_x * tile_size, tiles_y * tile_size, tile_size, tile_size};
       ret->map[pos++] = add_tile_to_index(ret, adler32(hash_buffer, tile_size * tile_size * 4), side_hashes, rect);
 
+#if 0
         /* DEBUG */
       printf("%x = ", adler32(hash_buffer, tile_size * tile_size * 4));
         for(int i= 0; i < tile_size * tile_size * 4; ++i) {
@@ -579,6 +579,7 @@ struct analyse_result *analyse_image(char *name, int tile_size) {
         }
         printf("\n");
         /* DEBUG */
+#endif
     }
   }
   /* okay, after setting up our input map, it's time to create the ruleset */
@@ -902,7 +903,7 @@ int main(int argc, char **argv) {
 
   struct analyse_result *test = analyse_image(image_name, tile_size);
   struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size);
-  print_analyse_result(test);
+ // print_analyse_result(test);
 
   bitfield32_map bf_map = {0};
 
@@ -939,6 +940,7 @@ int main(int argc, char **argv) {
           break;
       }
     }
+    SDL_SetRenderDrawColor(glob_renderer, 100, 100, 100, 255);
     SDL_RenderClear(glob_renderer);
     SDL_RenderCopy(glob_renderer, overlap_result->texture, NULL, NULL);
     // draw_input_map(test);
