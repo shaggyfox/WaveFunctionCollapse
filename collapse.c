@@ -941,15 +941,17 @@ float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int
 
 #include <time.h>
 int main(int argc, char **argv) {
-  int scale = 4;
   if (argc < 3) {
     printf("Usage\ncollapse <image> <tile_size>\n");
     return -1;
   }
   char *image_name = argv[1];
   int tile_size = strtol(argv[2], NULL, 10);
-  if (argc >= 4) {
-    scale = strtol(argv[3], NULL, 10);
+  int map_w = 0;
+  int map_h = 0;
+  if (argc >= 5) {
+    map_w = strtol(argv[3], NULL, 10);
+    map_h = strtol(argv[4], NULL, 10);
   }
   srand(time(NULL));
   int running =1 ;
@@ -961,17 +963,16 @@ int main(int argc, char **argv) {
   glob_renderer = SDL_CreateRenderer(glob_window, -1,
       SDL_RENDERER_SOFTWARE/*SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC*/);
 
-  SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / scale, SCREEN_HEIGHT / scale);
+  SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / 8, SCREEN_HEIGHT / 8);
 
-  struct analyse_result *test = analyse_image(image_name, tile_size);
+  //struct analyse_result *test = analyse_image(image_name, tile_size);
   struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size);
  // print_analyse_result(test);
  printf("tile_cnt = %d\n", overlap_result->tile_count);
 
   bitfield32_map bf_map = {0};
 
-  init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-      (SCREEN_HEIGHT/scale)/test->tile_size, overlap_result);
+  init_bitfield32_map(&bf_map, map_w, map_h, overlap_result);
   memset(&glob_history, 0, sizeof(glob_history));
   retry_cnt = 0;
   last_id = 0;
@@ -991,8 +992,7 @@ int main(int argc, char **argv) {
           }
 #endif
           free(bf_map.map);
-          init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-              (SCREEN_HEIGHT/scale)/test->tile_size, overlap_result);
+          init_bitfield32_map(&bf_map, map_w, map_h, overlap_result);
           glob_error_cond.error = 0;
           memset(&glob_history, 0, sizeof(glob_history));
           retry_cnt = 0;
