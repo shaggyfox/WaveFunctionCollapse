@@ -523,11 +523,22 @@ void tile_data_mirror_h(uint32_t *tile_data, int tile_size)
   }
 }
 
+void tile_data_rotate90(uint32_t *tile_data, int tile_size)
+{
+  uint32_t old[tile_size * tile_size];
+  memcpy(old, tile_data, sizeof(old));
+  for (int y = 0; y < tile_size; ++y) {
+    for (int x = 0; x < tile_size; ++x) {
+      tile_data[x * tile_size + (tile_size - y - 1)] = old[y * tile_size + x];
+    }
+  }
+}
+
 #define ANALYZE_FLAG_NO_Y_WRAP 1
 #define ANALYZE_FLAG_NO_X_WRAP 2
 #define ANALYZE_FLAG_DO_MIRROR_V 4
 #define ANALYZE_FLAG_DO_MIRROR_H 8
-
+#define ANALYZE_FLAG_DO_ROTATE 16
 struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flags) {
   struct analyse_result *ret = calloc(1, sizeof(*ret));
   ret->tile_size = tile_size;
@@ -539,6 +550,15 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flag
     for (int x = 0; x < surface_width - (flags & ANALYZE_FLAG_NO_X_WRAP)?tile_size:0; ++x) {
       overlap_get_tile_data(surface->pixels, surface_width, surface_height, tile_data, x, y, ret->tile_size, ret->tile_size);
       overlap_add_tile_to_index2(ret, tile_data);
+      if (flags & ANALYZE_FLAG_DO_ROTATE) {
+        tile_data_rotate90(tile_data, tile_size);
+        overlap_add_tile_to_index2(ret, tile_data);
+        tile_data_rotate90(tile_data, tile_size);
+        overlap_add_tile_to_index2(ret, tile_data);
+        tile_data_rotate90(tile_data, tile_size);
+        overlap_add_tile_to_index2(ret, tile_data);
+        tile_data_rotate90(tile_data, tile_size);
+      }
       if (flags & ANALYZE_FLAG_DO_MIRROR_V) {
         tile_data_mirror_v(tile_data, tile_size);
         overlap_add_tile_to_index2(ret, tile_data);
@@ -555,6 +575,8 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flag
         /* ??? */
         tile_data_mirror_v(tile_data, tile_size);
         tile_data_mirror_h(tile_data, tile_size);
+        overlap_add_tile_to_index2(ret, tile_data);
+        tile_data_mirror_v(tile_data, tile_size);
         overlap_add_tile_to_index2(ret, tile_data);
       }
     }
@@ -973,17 +995,32 @@ float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int
 #include <time.h>
 int main(int argc, char **argv) {
 #if 1
-  if (argc < 3) {
-    printf("Usage\ncollapse <image> <tile_size>\n");
+  if (argc < 5) {
+    printf("Usage\ncollapse <image> <tile_size> <w> <h> [flags]\n");
     return -1;
   }
   char *image_name = argv[1];
   int tile_size = strtol(argv[2], NULL, 10);
   int map_w = 0;
   int map_h = 0;
-  if (argc >= 5) {
-    map_w = strtol(argv[3], NULL, 10);
-    map_h = strtol(argv[4], NULL, 10);
+  int flags = 0;
+  map_w = strtol(argv[3], NULL, 10);
+  map_h = strtol(argv[4], NULL, 10);
+  for (int i=5 ; i < argc; ++i) {
+    if (!strcasecmp(argv[i], "ROTATE")) {
+      flags |= ANALYZE_FLAG_DO_ROTATE;
+    } else if (!strcasecmp(argv[i], "MIRROR_V")) {
+      flags |= ANALYZE_FLAG_DO_MIRROR_V;
+    } else if (!strcasecmp(argv[i], "MIRROR_H")) {
+      flags |= ANALYZE_FLAG_DO_MIRROR_H;
+    } else if (!strcasecmp(argv[i], "NO_V_WRAP")) {
+      flags |= ANALYZE_FLAG_NO_Y_WRAP;
+    } else if (!strcasecmp(argv[i], "NO_H_WRAP")) {
+      flags |= ANALYZE_FLAG_NO_X_WRAP;
+    } else {
+      printf("illegal flag us: ROTATE MIRROR_V MIRROR_H NO_V_WRAP NO_H_WRAP\n");
+      exit(1);
+    }
   }
   srand(time(NULL));
   int running =1 ;
@@ -998,7 +1035,7 @@ int main(int argc, char **argv) {
   SDL_RenderSetLogicalSize(glob_renderer, SCREEN_WIDTH / 8, SCREEN_HEIGHT / 8);
 
   //struct analyse_result *test = analyse_image(image_name, tile_size);
-  struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size, ANALYZE_FLAG_DO_MIRROR_V | ANALYZE_FLAG_NO_Y_WRAP);
+  struct analyse_result *overlap_result = overlap_analyse_image(image_name, tile_size, flags);
  // print_analyse_result(test);
  printf("tile_cnt = %d\n", overlap_result->tile_count);
 
@@ -1050,6 +1087,7 @@ int main(int argc, char **argv) {
 
       //bitfield32_map_history_add(&glob_history, x, y, *bf, HISTORY_FLAG_SAVEPOINT);
       bitfield32_set_to(bf, select_tile_based_on_weight(bf, overlap_result));
+      bf->entropy = 0.0;
       update_allowed_neighbours_cache(&bf_map, x, y, overlap_result);
       /* update neighbours */
       for(int dir = 0; dir < 4; ++dir) {
