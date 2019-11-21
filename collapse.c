@@ -618,7 +618,6 @@ void analyse_map(struct analyse_result *result)
 {
   int w = result->map_width;
   int h = result->map_height;
-  int pos = 0;
 #define IN_RANGE(x, y) ((x) >= 0 && (x) < w && (y) >= 0 && (y) < h)
   for (int y = 0; y < result->map_height; ++y) {
     for (int x = 0; x < result->map_width; ++x) {
@@ -631,7 +630,6 @@ void analyse_map(struct analyse_result *result)
           hash_list_add(&result->tiles[tile_id].allowed_neighbour_hashes[dir], result->tiles[test_tile_id].hash_dir[OPOSITE_DIRECTION(dir)]);
         }
       }
-      pos += 1;
     }
   }
 }
@@ -763,7 +761,7 @@ void update_allowed_neighbours_cache(struct bitfield32_map *map, int x, int y, s
 
 void init_allowed_neighbours_cache(struct bitfield32_map *map, struct analyse_result *res)
 {
-  map->cache = malloc(sizeof(*map->cache) * map->map_width * map->map_height);
+  map->cache = calloc(1, sizeof(*map->cache) * map->map_width * map->map_height);
   for(int y = 0; y < map->map_height; ++y) {
     for (int x = 0; x < map->map_width; ++x) {
       update_allowed_neighbours_cache(map, x, y, res);
@@ -884,7 +882,7 @@ struct error_condition {
 /* what's happening here?
  *
  */
-int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res)
+int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res, int from_dir)
 {
   /* wo dont evaluate any tiles that are out-of-map */
   if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
@@ -935,9 +933,11 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
 
     /* update neighbours */
     for (int dir = 0; dir < 4; ++dir) {
+      if (dir == from_dir)
+        continue;
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
-      if (-1 == update_map_with_rules(map, test_x, test_y, res)) {
+      if (-1 == update_map_with_rules(map, test_x, test_y, res, OPOSITE_DIRECTION(dir))) {
         return -1;
       }
     }
@@ -963,7 +963,7 @@ void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_resul
   /* initial update */
   for(int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-     update_map_with_rules(map, x, y, res);
+     update_map_with_rules(map, x, y, res, -1);
     }
   }
   /* calculate entropy */
@@ -1093,7 +1093,7 @@ int main(int argc, char **argv) {
       for(int dir = 0; dir < 4; ++dir) {
          int test_x = DIR_X(dir, x);
          int test_y = DIR_Y(dir, y);
-         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result)) {
+         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result, OPOSITE_DIRECTION(dir))) {
            break;
          }
       }
