@@ -1022,7 +1022,7 @@ int main(int argc, char **argv) {
       exit(1);
     }
   }
-  //srand(time(NULL));
+  srand(time(NULL));
   int running =1 ;
   SDL_Init(SDL_INIT_VIDEO);
   SDL_Window *glob_window = SDL_CreateWindow("Collapse",
@@ -1097,8 +1097,6 @@ int main(int argc, char **argv) {
            break;
          }
       }
-    } else {
-      running = 0;
     }
     draw_map_with_weight(&bf_map, overlap_result);
     SDL_RenderPresent(glob_renderer);
