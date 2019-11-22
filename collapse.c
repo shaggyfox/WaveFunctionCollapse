@@ -108,7 +108,7 @@ void bitfield32_unset_bit(bitfield32 *bf, int bit)
   bf->data[bit / BITS] &= ~(1UL << (bit % BITS));
 }
 
-void bitfield32_and(bitfield32 *a, bitfield32 *b)
+static void bitfield32_and(bitfield32 *a, bitfield32 *b)
 {
   a->bitcount_needs_update = 1;
   for(int i = 0; i < MAX_TILES / BITS; ++i) {
@@ -158,7 +158,7 @@ static int dir_modifier_x[] = {0, -1, 0, 1};
 static int dir_modifier_y[] = {-1, 0, 1, 0};
 #define DIR_X(dir, x) ((x) + dir_modifier_x[dir])
 #define DIR_Y(dir, y) ((y) + dir_modifier_y[dir])
-static char *dir_names[] = {"TOP", "LEFT", "BOTTOM", "RIGHT"};
+char *dir_names[] = {"TOP", "LEFT", "BOTTOM", "RIGHT"};
 
 
 uint32_t murmur3_32(const uint8_t* key, size_t len, uint32_t seed)
@@ -228,12 +228,6 @@ SDL_Surface *load_surface(char *data)
   return surface;
 }
 
-struct hash_list
-{
-  int count;
-  uint32_t *values;
-};
-
 typedef bitfield32 (*allowed_neighbours_cache)[4];
 
 struct analyse_result {
@@ -245,7 +239,6 @@ struct analyse_result {
     uint32_t bit;               /* bit-id */
     uint32_t hash;              /* hash value of tile */
     uint32_t hash_dir[4];       /* hash value for each side */
-    struct hash_list allowed_neighbour_hashes[4];
     bitfield32 allowed_neighbours[4];
     float weight;
   } *tiles;
@@ -302,12 +295,6 @@ void print_analyse_result(struct analyse_result *result)
         result->tiles[i].rect.x,
         result->tiles[i].rect.y);
     printf("rules:\n");
-    for( int dir = 0; dir < 4; ++dir) {
-      printf("%s:\n", dir_names[dir]);
-      for(int n = 0; n < result->tiles[i].allowed_neighbour_hashes[dir].count; ++n) {
-        printf(" %x\n", result->tiles[i].allowed_neighbour_hashes[dir].values[n]);
-      }
-    }
 
   }
   int pos = 0;
@@ -317,50 +304,6 @@ void print_analyse_result(struct analyse_result *result)
     }
     printf("\n");
   }
-}
-
-void hash_list_add(struct hash_list *list, uint32_t hash)
-{
-  /* search for hash */
-  for (int i = 0; i < list->count; ++i) {
-    if (hash == list->values[i]) {
-      /* found nothing to do */
-      return;
-    }
-  }
-  list->values = realloc(list->values, sizeof(*list->values) * (list->count + 1));
-  list->values[list->count] = hash;
-  list->count += 1;
-}
-
-int hash_list_find(struct hash_list *list, uint32_t hash)
-{
-  for (int i = 0; i < list->count;  ++i) {
-    if (hash == list->values[i]) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-typedef struct hash_list_iter {
-  int pos;
-  struct hash_list *list;
-} hash_list_iter;
-
-void hash_list_iter_init(struct hash_list_iter *iter, struct hash_list *list)
-{
-  iter->pos = 0;
-  iter->list = list;
-}
-
-int hash_list_iter_next(struct hash_list_iter *iter, uint32_t *hash)
-{
-  if (iter->pos >= iter->list->count) {
-    return 0;
-  }
-  *hash = iter->list->values[iter->pos++];
-  return 1;
 }
 
 uint32_t calculate_hash(enum direction_e direction, char *hash_buffer, int tile_size)
@@ -562,25 +505,28 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flag
         overlap_add_tile_to_index2(ret, tile_data);
         tile_data_rotate90(tile_data, tile_size);
       }
-      if (flags & ANALYZE_FLAG_DO_MIRROR_V) {
-        tile_data_mirror_v(tile_data, tile_size);
-        overlap_add_tile_to_index2(ret, tile_data);
-        /* reset mirroring */
-        tile_data_mirror_v(tile_data, tile_size);
-      }
-      if (flags & ANALYZE_FLAG_DO_MIRROR_H) {
-        tile_data_mirror_h(tile_data, tile_size);
-        overlap_add_tile_to_index2(ret, tile_data);
-        /* reset mirroring */
-        tile_data_mirror_h(tile_data, tile_size);
-      }
-      if (flags & ANALYZE_FLAG_DO_MIRROR_H && flags & ANALYZE_FLAG_DO_MIRROR_V) {
-        /* ??? */
-        tile_data_mirror_v(tile_data, tile_size);
-        tile_data_mirror_h(tile_data, tile_size);
-        overlap_add_tile_to_index2(ret, tile_data);
-        tile_data_mirror_v(tile_data, tile_size);
-        overlap_add_tile_to_index2(ret, tile_data);
+      if (flags & ANALYZE_FLAG_DO_ROTATE && flags & ANALYZE_FLAG_DO_MIRROR_H && flags & ANALYZE_FLAG_DO_MIRROR_V) {
+          tile_data_mirror_v(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+          tile_data_rotate90(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+          tile_data_rotate90(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+          tile_data_rotate90(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+      } else {
+        if (flags & ANALYZE_FLAG_DO_MIRROR_V) {
+          tile_data_mirror_v(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+          /* reset mirroring */
+          tile_data_mirror_v(tile_data, tile_size);
+        }
+        if (flags & ANALYZE_FLAG_DO_MIRROR_H) {
+          tile_data_mirror_h(tile_data, tile_size);
+          overlap_add_tile_to_index2(ret, tile_data);
+          /* reset mirroring */
+          tile_data_mirror_h(tile_data, tile_size);
+        }
       }
     }
   }
@@ -617,25 +563,6 @@ struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flag
   return ret;
 }
 
-void analyse_map(struct analyse_result *result)
-{
-  int w = result->map_width;
-  int h = result->map_height;
-#define IN_RANGE(x, y) ((x) >= 0 && (x) < w && (y) >= 0 && (y) < h)
-  for (int y = 0; y < result->map_height; ++y) {
-    for (int x = 0; x < result->map_width; ++x) {
-      for ( int dir = 0; dir < 4; ++dir) {
-        uint32_t tile_id = result->map[y * result->map_width + x];
-        int test_x = DIR_X(dir, x);
-        int test_y = DIR_Y(dir, y);
-        if (IN_RANGE(test_x, test_y)) {
-          uint32_t test_tile_id = result->map[test_y * result->map_width + test_x];
-          hash_list_add(&result->tiles[tile_id].allowed_neighbour_hashes[dir], result->tiles[test_tile_id].hash_dir[OPOSITE_DIRECTION(dir)]);
-        }
-      }
-    }
-  }
-}
 
 void draw_rect(int x, int y, int w, int h, int r, int g, int b)
 {
@@ -645,54 +572,6 @@ void draw_rect(int x, int y, int w, int h, int r, int g, int b)
   SDL_SetRenderDrawColor(glob_renderer, 0, 0, 0, 0);
 }
 
-#if 0
-struct analyse_result *analyse_image(char *name, int tile_size) {
-  struct analyse_result *ret = calloc(1, sizeof(*ret));
-  char *hash_buffer = calloc(1, tile_size * tile_size * 4);
-  SDL_Surface *surface = load_surface(name);
-  int surface_width = surface->w;
-  //int surface_height = surface->h;
-  int tiles_w = surface->w / tile_size;
-  int tiles_h = surface->h / tile_size;
-  ret->map = calloc(1, sizeof(*ret->map) * tiles_w * tiles_h);
-  ret->map_width = tiles_w;
-  ret->map_height = tiles_h;
-  ret->tile_size = tile_size;
-  char *pixel_data = surface->pixels;
-  int pos = 0;
-  /* first split input image in tile_size chunks */
-  for (int tiles_y = 0; tiles_y < tiles_h; ++tiles_y) {
-    for (int tiles_x = 0; tiles_x < tiles_w; ++ tiles_x) {
-      char *offset = &pixel_data[tiles_y * tile_size * surface_width * 4 + tiles_x * tile_size * 4];
-      /* read tile_sizeXtile_size chunk at current position */
-      for (int chunk_y = 0; chunk_y < tile_size; ++chunk_y) {
-        memcpy(&hash_buffer[chunk_y * tile_size * 4], &offset[chunk_y * surface_width * 4], tile_size * 4);
-      }
-      uint32_t side_hashes[4];
-      for (int dir = 0; dir < 4; ++dir) {
-        side_hashes[dir] = calculate_hash(dir, hash_buffer, tile_size);
-      }
-      SDL_Rect rect = {tiles_x * tile_size, tiles_y * tile_size, tile_size, tile_size};
-      ret->map[pos++] = add_tile_to_index(ret, adler32(hash_buffer, tile_size * tile_size * 4), side_hashes, rect);
-
-#if 0
-        /* DEBUG */
-      printf("%x = ", adler32(hash_buffer, tile_size * tile_size * 4));
-        for(int i= 0; i < tile_size * tile_size * 4; ++i) {
-          printf("%02x", hash_buffer[i]);
-        }
-        printf("\n");
-        /* DEBUG */
-#endif
-    }
-  }
-  /* okay, after setting up our input map, it's time to create the ruleset */
-  analyse_map(ret);
-  /* create texture from surface */
-  ret->texture = SDL_CreateTextureFromSurface(glob_renderer, surface);
-  return ret;
-}
-#endif
 
 void draw_tile(int x, int y, int tile_id, struct analyse_result *res)
 {
@@ -1122,6 +1001,9 @@ int main(int argc, char **argv) {
     while (SDL_PollEvent(&event)) {
       switch(event.type) {
         case SDL_KEYDOWN:
+          if (event.key.keysym.sym == 'q') {
+            running = 0;
+          } else if (event.key.keysym.sym == SDLK_SPACE) {
 #if 0
           if (glob_error_cond.error) {
             /* reset history */
@@ -1142,6 +1024,7 @@ int main(int argc, char **argv) {
           memset(&glob_history, 0, sizeof(glob_history));
           retry_cnt = 0;
           last_id = 0;
+          } 
           break;
         case SDL_QUIT:
           running = 0;
