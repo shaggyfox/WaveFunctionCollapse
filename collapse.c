@@ -879,6 +879,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
         glob_error_cond.x = x;
         glob_error_cond.y = y;
         glob_error_cond.error = 1;
+        printf("error condition\n");
         return -1;
       case 1:
         /* resolved */
@@ -926,7 +927,10 @@ void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_resul
   printf("initial update\n");
   for(int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-     update_map_with_rules(map, x, y, res, -1, output_surface, flags);
+     if (-1 == update_map_with_rules(map, x, y, res, -1, output_surface, flags)) {
+       printf("error\n");
+       return;
+     }
     }
   }
   printf("initial entropy calc\n");
