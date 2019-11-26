@@ -485,6 +485,8 @@ void tile_data_rotate90(uint32_t *tile_data, int tile_size)
 #define ANALYZE_FLAG_DO_MIRROR_V 4
 #define ANALYZE_FLAG_DO_MIRROR_H 8
 #define ANALYZE_FLAG_DO_ROTATE 16
+#define OUTPUT_FLAG_MAKE_SEAMLESS 32
+
 struct analyse_result *overlap_analyse_image(char *name, int tile_size, int flags) {
   struct analyse_result *ret = calloc(1, sizeof(*ret));
   ret->tile_size = tile_size;
@@ -823,10 +825,20 @@ struct error_condition {
 /* what's happening here?
  *
  */
-int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res, int from_dir, SDL_Surface *output_surface)
+int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res, int from_dir, SDL_Surface *output_surface, int flags)
 {
   /* wo dont evaluate any tiles that are out-of-map */
-  if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
+  if (flags & OUTPUT_FLAG_MAKE_SEAMLESS) {
+    /* normalize map (wrap) */
+    while (x < 0) {
+      x += map->map_width;
+    }
+    while (y < 0) {
+      y += map->map_height;
+    }
+    x %= map->map_width;
+    y %= map->map_height;
+  } else if (x < 0 || x >= map->map_width || y < 0 || y >= map->map_height) {
     return 0;
   }
 
@@ -845,6 +857,16 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
     for (int dir = 0; dir < 4; ++dir) {
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
+      if (flags & OUTPUT_FLAG_MAKE_SEAMLESS) {
+        while (test_x < 0) {
+          test_x += map->map_width;
+        }
+        while (test_y < 0) {
+          test_y += map->map_height;
+        }
+        test_x %= map->map_width;
+        test_y %= map->map_height;
+      }
       if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_height) {
         bitfield32_and(map_element, &map->cache[map->map_width * test_y + test_x][OPOSITE_DIRECTION(dir)]);
       }
@@ -879,7 +901,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
         continue;
       int test_x = DIR_X(dir, x);
       int test_y = DIR_Y(dir, y);
-      if (-1 == update_map_with_rules(map, test_x, test_y, res, OPOSITE_DIRECTION(dir), output_surface)) {
+      if (-1 == update_map_with_rules(map, test_x, test_y, res, OPOSITE_DIRECTION(dir), output_surface, flags)) {
         return -1;
       }
     }
@@ -888,31 +910,36 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
   return 0;
 }
 
-void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_result *res, SDL_Surface *output_surface)
+void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_result *res, SDL_Surface *output_surface, int flags)
 {
   map->map_width = w;
   map->map_height = h;
   map->map = calloc(1, sizeof(*map->map) * w * h);
   /* fill with all possibilities */
   bitfield32 tmp_v = {0};
+  printf("initialize bitfield\n");
   for(int b = 0; b < res->tile_count; ++b) {
     bitfield32_set_bit(&tmp_v, b);
   }
   for (int i = 0; i < w * h; ++i) {
     map->map[i] = tmp_v;
   }
+  printf("initialize neighbour-cache\n");
   init_allowed_neighbours_cache(map, res);
   /* initial update */
+  printf("initial update\n");
   for(int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-     update_map_with_rules(map, x, y, res, -1, output_surface);
+     update_map_with_rules(map, x, y, res, -1, output_surface, flags);
     }
   }
+  printf("initial entropy calc\n");
   /* calculate entropy */
   for(int i = 0; i < w * h; ++i) {
     /* XXX ugly XXX */
     map->map[i].entropy = get_entropy(&map->map[i], res);
   }
+  printf("done\n");
 }
 
 float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int *out_y)
@@ -959,8 +986,10 @@ int main(int argc, char **argv) {
       flags |= ANALYZE_FLAG_NO_Y_WRAP;
     } else if (!strcasecmp(argv[i], "NO_H_WRAP")) {
       flags |= ANALYZE_FLAG_NO_X_WRAP;
+    } else if (!strcasecmp(argv[i], "SEAMLESS")) {
+      flags |= OUTPUT_FLAG_MAKE_SEAMLESS;
     } else {
-      printf("illegal flag us: ROTATE MIRROR_V MIRROR_H NO_V_WRAP NO_H_WRAP\n");
+      printf("illegal flag us: ROTATE MIRROR_V MIRROR_H NO_V_WRAP NO_H_WRAP SEAMLESS\n");
       exit(1);
     }
   }
@@ -985,14 +1014,14 @@ int main(int argc, char **argv) {
   SDL_Texture *output_texture = SDL_CreateTexture(glob_renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, map_w, map_h);
   SDL_Surface *output_surface = SDL_CreateRGBSurfaceWithFormat(0, map_w, map_h, 32, SDL_PIXELFORMAT_RGBA8888);
 
-  init_bitfield32_map(&bf_map, map_w, map_h, overlap_result, output_surface);
-#if 0
+  init_bitfield32_map(&bf_map, map_w, map_h, overlap_result, output_surface, flags);
+
   for( int tmp_y = 0; tmp_y < map_h; ++ tmp_y) {
     for (int tmp_x = 0; tmp_x < map_w; ++tmp_x) {
       update_output_map(output_surface, tmp_x, tmp_y, &bf_map, overlap_result);
     }
   }
-#endif
+
   memset(&glob_history, 0, sizeof(glob_history));
   retry_cnt = 0;
   last_id = 0;
@@ -1010,11 +1039,11 @@ int main(int argc, char **argv) {
             bitfield32_map_history_rollback(&bf_map, &glob_history);
           } else {
             init_bitfield32_map(&bf_map, (SCREEN_WIDTH/scale)/test->tile_size,
-               (SCREEN_HEIGHT/scale)/test->tile_size, test);
+               (SCREEN_HEIGHT/scale)/test->tile_size, test, flags);
           }
 #endif
           free(bf_map.map);
-          init_bitfield32_map(&bf_map, map_w, map_h, overlap_result, output_surface);
+          init_bitfield32_map(&bf_map, map_w, map_h, overlap_result, output_surface, flags);
           for( int tmp_y = 0; tmp_y < map_h; ++ tmp_y) {
             for (int tmp_x = 0; tmp_x < map_w; ++tmp_x) {
               update_output_map(output_surface, tmp_x, tmp_y, &bf_map, overlap_result);
@@ -1024,7 +1053,9 @@ int main(int argc, char **argv) {
           memset(&glob_history, 0, sizeof(glob_history));
           retry_cnt = 0;
           last_id = 0;
-          } 
+          } else if (event.key.keysym.sym == 's') {
+            SDL_SaveBMP(output_surface, "out.bmp");
+          }
           break;
         case SDL_QUIT:
           running = 0;
@@ -1053,7 +1084,7 @@ int main(int argc, char **argv) {
       for(int dir = 0; dir < 4; ++dir) {
          int test_x = DIR_X(dir, x);
          int test_y = DIR_Y(dir, y);
-         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result, OPOSITE_DIRECTION(dir), output_surface)) {
+         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result, OPOSITE_DIRECTION(dir), output_surface, flags)) {
            break;
          }
       }
