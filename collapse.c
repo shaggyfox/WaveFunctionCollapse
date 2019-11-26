@@ -851,25 +851,21 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
 
   bitfield32 old_value = *map_element;
 
-  bitfield32_iter main_iter = bitfield32_get_iter(map_element);
-  int main_id;
-  while (-1 != (main_id = bitfield32_iter_next(&main_iter))) {
-    for (int dir = 0; dir < 4; ++dir) {
-      int test_x = DIR_X(dir, x);
-      int test_y = DIR_Y(dir, y);
-      if (flags & OUTPUT_FLAG_MAKE_SEAMLESS) {
-        while (test_x < 0) {
-          test_x += map->map_width;
-        }
-        while (test_y < 0) {
-          test_y += map->map_height;
-        }
-        test_x %= map->map_width;
-        test_y %= map->map_height;
+  for (int dir = 0; dir < 4; ++dir) {
+    int test_x = DIR_X(dir, x);
+    int test_y = DIR_Y(dir, y);
+    if (flags & OUTPUT_FLAG_MAKE_SEAMLESS) {
+      while (test_x < 0) {
+        test_x += map->map_width;
       }
-      if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_height) {
-        bitfield32_and(map_element, &map->cache[map->map_width * test_y + test_x][OPOSITE_DIRECTION(dir)]);
+      while (test_y < 0) {
+        test_y += map->map_height;
       }
+      test_x %= map->map_width;
+      test_y %= map->map_height;
+    }
+    if (test_x >= 0 && test_x < map->map_width && test_y >= 0 && test_y < map->map_height) {
+      bitfield32_and(map_element, &map->cache[map->map_width * test_y + test_x][OPOSITE_DIRECTION(dir)]);
     }
   }
   if (!bitfield32_cmp(&old_value, map_element)) {
