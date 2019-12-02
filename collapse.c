@@ -822,6 +822,82 @@ struct error_condition {
   int y0;
 } glob_error_cond = {0};
 
+
+#define STACK_SIZE 10000
+struct update_stack_data {
+  int x;
+  int y;
+  int from_dir;
+};
+
+struct update_stack {
+  int start;
+  int cnt;
+  struct update_stack_data stack[STACK_SIZE];
+};
+
+struct update_stack glob_stack = {0};
+
+void push_stack(int x, int y, int from_dir)
+{
+  assert(glob_stack.cnt < STACK_SIZE);
+  int stack_pos = (glob_stack.start + glob_stack.cnt) % STACK_SIZE;
+  glob_stack.stack[stack_pos].x = x;
+  glob_stack.stack[stack_pos].y = y;
+  glob_stack.stack[stack_pos].from_dir = from_dir;
+  ++ glob_stack.cnt;
+}
+
+int pop_stack(int *x, int *y, int *from_dir)
+{
+  if (glob_stack.cnt <= 0) {
+    return 0;
+  }
+  *x = glob_stack.stack[glob_stack.start].x;
+  *y = glob_stack.stack[glob_stack.start].y;
+  *from_dir = glob_stack.stack[glob_stack.start].from_dir;
+  glob_stack.start = (glob_stack.start + 1) % STACK_SIZE;
+  -- glob_stack.cnt;
+  return 1;
+}
+
+void reset_stack(void)
+{
+  glob_stack.cnt = 0;
+  glob_stack.start = 0;
+}
+
+int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_result *res, int from_dir, SDL_Surface *output_surface, int flags);
+
+int update_recursive(bitfield32_map *map, int x, int y, struct analyse_result *res, int from_dir, SDL_Surface *output_surface, int flags)
+{
+  push_stack(x, y, from_dir);
+  while (pop_stack(&x, &y, &from_dir)) {
+    switch (update_map_with_rules(map, x, y, res, from_dir, output_surface, flags)) {
+      case -1:
+        /* ERROR condition */
+        glob_error_cond.x = x;
+        glob_error_cond.y = y;
+        glob_error_cond.error = 1;
+        printf("error condition\n");
+        return -1;
+      case 0:
+        break;
+      case 1:
+        /* value changed push things to stack */
+        for (int dir = 0 ; dir < 4; ++dir) {
+          if (dir == from_dir)
+            continue;
+          int test_x = DIR_X(dir, x);
+          int test_y = DIR_Y(dir, y);
+          push_stack(test_x, test_y, OPOSITE_DIRECTION(dir));
+        }
+        break;
+    }
+  }
+  return 0;
+}
+
 /* what's happening here?
  *
  */
@@ -875,11 +951,13 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
     update_allowed_neighbours_cache(map, x, y, res);
     switch (bitfield32_get_bitcount(map_element)) {
       case 0:
+#if 0
         /* ERROR condition */
         glob_error_cond.x = x;
         glob_error_cond.y = y;
         glob_error_cond.error = 1;
         printf("error condition\n");
+#endif
         return -1;
       case 1:
         /* resolved */
@@ -891,7 +969,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
         map_element->entropy = get_entropy(map_element, res);
         break;
     }
-
+#if 0
     /* update neighbours */
     for (int dir = 0; dir < 4; ++dir) {
       if (dir == from_dir)
@@ -902,6 +980,7 @@ int update_map_with_rules(bitfield32_map *map, int x, int y, struct analyse_resu
         return -1;
       }
     }
+#endif
     return 1;
   }
   return 0;
@@ -927,7 +1006,7 @@ void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_resul
   printf("initial update\n");
   for(int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-     if (-1 == update_map_with_rules(map, x, y, res, -1, output_surface, flags)) {
+     if (-1 == update_recursive(map, x, y, res, -1, output_surface, flags)) {
        printf("error\n");
        return;
      }
@@ -941,6 +1020,25 @@ void init_bitfield32_map(bitfield32_map *map, int w, int h, struct analyse_resul
   }
   printf("done\n");
 }
+
+float bitfield32_map_get_smales_entropy_pos_last(bitfield32_map *map, int *out_x, int *out_y)
+{
+  float smalest = 0.0;
+  for (int y = 0; y <  map->map_height; ++y) {
+    for (int x = 0; x < map->map_width; ++x) {
+      bitfield32 *b = &map->map[y * map->map_width + x];
+      if (bitfield32_get_bitcount(b) > 1) {
+        if (smalest == 0.0 || b->entropy <= smalest) {
+          *out_x = x;
+          *out_y = y;
+          smalest = b->entropy;
+        }
+      }
+    }
+  }
+  return smalest;
+}
+
 
 float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int *out_y)
 {
@@ -959,6 +1057,8 @@ float bitfield32_map_get_smales_entropy_pos(bitfield32_map *map, int *out_x, int
   }
   return smalest;
 }
+
+float (*get_smalest)(bitfield32_map *map, int *out_x, int *out_y) = bitfield32_map_get_smales_entropy_pos;
 
 
 #include <time.h>
@@ -988,8 +1088,10 @@ int main(int argc, char **argv) {
       flags |= ANALYZE_FLAG_NO_X_WRAP;
     } else if (!strcasecmp(argv[i], "SEAMLESS")) {
       flags |= OUTPUT_FLAG_MAKE_SEAMLESS;
+    } else if (!strcasecmp(argv[i], "REVERSE")) {
+      get_smalest = bitfield32_map_get_smales_entropy_pos_last;
     } else {
-      printf("illegal flag us: ROTATE MIRROR_V MIRROR_H NO_V_WRAP NO_H_WRAP SEAMLESS\n");
+      printf("illegal flag us: ROTATE MIRROR_V MIRROR_H NO_V_WRAP NO_H_WRAP SEAMLESS REVERSE\n");
       exit(1);
     }
   }
@@ -1053,6 +1155,8 @@ int main(int argc, char **argv) {
           memset(&glob_history, 0, sizeof(glob_history));
           retry_cnt = 0;
           last_id = 0;
+          /* reset stack */
+          reset_stack();
           } else if (event.key.keysym.sym == 's') {
             SDL_SaveBMP(output_surface, "out.bmp");
           }
@@ -1069,7 +1173,7 @@ int main(int argc, char **argv) {
     // draw_input_map(test);
     int x = 0;
     int y = 0;
-    if (!glob_error_cond.error && 0.0 < bitfield32_map_get_smales_entropy_pos (&bf_map, &x, &y)) {
+    if (!glob_error_cond.error && 0.0 < get_smalest(&bf_map, &x, &y)) {
       /* set last set tile */
       glob_error_cond.x0 = x;
       glob_error_cond.y0 = y;
@@ -1084,7 +1188,7 @@ int main(int argc, char **argv) {
       for(int dir = 0; dir < 4; ++dir) {
          int test_x = DIR_X(dir, x);
          int test_y = DIR_Y(dir, y);
-         if (-1 == update_map_with_rules(&bf_map, test_x, test_y, overlap_result, OPOSITE_DIRECTION(dir), output_surface, flags)) {
+         if (-1 == update_recursive(&bf_map, test_x, test_y, overlap_result, OPOSITE_DIRECTION(dir), output_surface, flags)) {
            break;
          }
       }
